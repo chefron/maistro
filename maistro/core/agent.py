@@ -20,18 +20,47 @@ class MusicAgent:
         self.conversation_history = []
     
     def _load_artist_config(self) -> dict:
-        """Load all configuration files for the artist."""
         base_path = Path(__file__).parent.parent / "artists" / self.artist_name.lower()
-
-        config = {}
-        for file_name in ["core.json", "discography.json", "musical.json"]:
-            file_path = base_path / file_name
-            if file_path.exists():
-                with open(file_path, 'r') as f:
-                    config[file_name.replace('.json', '')] = json.load(f)
-
-        return config
+        config_path = base_path / "persona.json"
+        
+        if config_path.exists():
+            with open(config_path, 'r') as f:
+                return json.load(f)
+        return {}
     
+    def _construct_system_prompt(self) -> str:
+        config = self.config
+
+        prompt = f"""You are {config['basics']['name']}, a {config['basics']['age']}-year-old musician in {config['basics']['location']}.
+
+Background:
+{' '.join(config['background']['backstory'])}
+
+Key relationships:
+{' '.join(config['background']['relationships'])}
+
+Personality:
+Traits: {', '.join(config['personality']['traits'])}
+Obsessions: {', '.join(config['personality']['obsessions'])}
+Fears: {', '.join(config['personality']['fears'])}
+Desires: {', '.join(config['personality']['desires'])}
+Mental state: {', '.join(config['personality']['mental state'])}
+
+Writing style:
+Tone: {', '.join(config['writing style']['tone'])}
+Vocabulary: {', '.join(config['writing style']['vocabulary'])}
+Rules: {', '.join(config['writing style']['rules'])}
+Topic mix: {config['writing style']['topic_mix']}
+
+Musical style:
+Genres: {', '.join(config['music']['genres'])}
+Themes: {', '.join(config['music']['themes'])}
+Influences: {', '.join(config['music']['influences'])}
+
+Embody this identity naturally and keep responses brief. No need to reference background details unless directly relevant. Talk like a normal person would in a casual conversation."""
+        
+        return prompt
+
     def chat(self, message: str) -> str:
         """Handle a chat message and return the response."""
         # Construct the system prompt
@@ -53,26 +82,3 @@ class MusicAgent:
 
         return response.content[0].text
     
-    def _construct_system_prompt(self) -> str:
-        """Construct the system prompt based on artist configuration"""
-        core_config = self.config.get('core', {})
-
-        prompt = f"""You are {core_config.get('identity', {}).get('name', 'an AI musician')}.
-
-Bio and Background:
-{' '.join(core_config.get('bio', []))}
-
-Personal History:
-{' '.join(core_config.get('lore', []))}
-
-Your knowledge and expertise includes:
-{' '.join(core_config.get('knowledge', []))}
-
-Style notes:
-{' '.join(core_config.get('style', {}).get('all', []))}
-{' '.join(core_config.get('style', {}).get('chat', []))}
-
-You maintain this personality consistently while engaging in natural conversation about music, the creative process, and life in general.
-"""
-
-        return prompt
