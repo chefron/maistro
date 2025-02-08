@@ -1,26 +1,33 @@
 {
     "basics": {
-        "name": "",
-        "age": "",
-        "pronouns": "",
-        "location": ""
+        "name":"",
+        "age":"",
+        "pronouns":"",
+        "location":""
     },
 
     "background": {
-        "backstory": "",
-        "relationships": ""
+        "backstory": [ 
+        ],
+        "relationships": [
+        ]
     },
 
     "personality": {
-        "traits": [],
-        "obsessions": [],
-        "fears": [],
-        "desires": []
+       "traits": [],
+       "obsessions": [],
+       "fears": [],
+       "desires": [],
+       "mental state": []
     },
 
     "writing style": {
         "tone": [],
-        "phrases to avoid": []
+        "vocabulary": [],
+        "rules": [
+        ],
+        "topic_mix": {
+        }
     },
 
     "music": {

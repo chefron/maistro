@@ -1,0 +1,33 @@
+maistro/
+├── maistro/
+│   ├── core/
+│   │   ├── __init__.py
+│   │   ├── agent.py      # Core agent functionality
+│   │   ├── memory.py     # Memory management
+│   │   └── utils.py      # Helper functions
+│   ├── music/
+│   │   ├── __init__.py
+│   │   ├── lyrics.py     # Lyrics generation
+│   │   └── prompts.py    # Suno prompt engineering
+│   └── artists/
+│       ├── templates/
+│       │   └── persona.json
+│       └── dolla_llama/
+│           ├── persona.json
+│           └── memory/
+│               ├── songs/
+│               │   ├── scrollin.md
+│               │   ├── phone_sex.md
+│               │   ├── hallucinations.md
+│               │   └── cabal.md
+│               ├── feedback/
+│               │   ├── phone_sex_feedback.md
+│               │   └── scrollin_feedback.md
+│               │   ├── cabal_feedback.md
+│               │   └── hallucinations_feedback.md
+│               ├── billboard/		# Weekly Hot 100 data and lyrics
+│               ├── songwriting/	# Song Exploder transcripts, analysis reports
+│               └── analytics/		# Streaming stats and performance metrics
+├── examples/
+├── tests/
+└── pyproject.toml
