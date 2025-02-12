@@ -4,6 +4,8 @@ import os
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from maistro.core.memory.manager import MemoryManager
+
 class MusicAgent:
     def __init__(self, artist_name: str):
         # Load environment variables
@@ -15,6 +17,9 @@ class MusicAgent:
         # Load artist configurations
         self.artist_name = artist_name
         self.config = self._load_artist_config()
+
+        # Initialize document memory
+        self.memory = MemoryManager(artist_name)
 
         # Initialize conversation memory
         self.conversation_history = []
@@ -81,4 +86,3 @@ Embody this identity naturally and keep responses brief. No need to reference ba
         self.conversation_history.append({"role": "assistant", "content": response.content[0].text})
 
         return response.content[0].text
-    
