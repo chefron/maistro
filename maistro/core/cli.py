@@ -75,6 +75,16 @@ class MaistroCLI:
             )
         )
 
+        self._register_command(
+            Command(
+                name="chat",
+                description="Chat with the artist",
+                tips="Use 'exit' or 'quit' to end the chat session",
+                handler=self.start_chat,
+                aliases=['talk']
+            )
+        )
+
         # Memory commands
         self._register_command(
             Command(
@@ -265,6 +275,23 @@ class MaistroCLI:
         logger.info("\nAvailable Artists:")
         for artist in sorted(artists, key=str.lower):
             logger.info(f"- {artist}")
+
+    def start_chat(self, input_list: List[str]) -> None:
+        """Start an interactive chat with the loaded artist"""
+        if not self.agent:
+            logger.info("No artist loaded. Use 'load-artist' first")
+            return
+        
+        print(f"\nChatting with {self.agent.artist_name} (type 'exit' to quit)")
+        print("-" * 50)
+
+        while True:
+            user_input = input("\nYou: ").strip()
+            if user_input.lower() in ['exit', 'quit']:
+                break
+
+            response = self.agent.chat(user_input)
+            print(f"\n{self.agent.artist_name}: {response}")
 
     def memory_upload(self, input_list: List[str]) -> None:
         """Upload documents to agent memory"""
