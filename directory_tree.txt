@@ -1,33 +1,57 @@
-maistro/
-├── maistro/
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── agent.py      # Core agent functionality
-│   │   ├── memory.py     # Memory management
-│   │   └── utils.py      # Helper functions
-│   ├── music/
-│   │   ├── __init__.py
-│   │   ├── lyrics.py     # Lyrics generation
-│   │   └── prompts.py    # Suno prompt engineering
-│   └── artists/
-│       ├── templates/
-│       │   └── persona.json
-│       └── dolla_llama/
-│           ├── persona.json
-│           └── memory/
-│               ├── songs/
-│               │   ├── scrollin.md
-│               │   ├── phone_sex.md
-│               │   ├── hallucinations.md
-│               │   └── cabal.md
-│               ├── feedback/
-│               │   ├── phone_sex_feedback.md
-│               │   └── scrollin_feedback.md
-│               │   ├── cabal_feedback.md
-│               │   └── hallucinations_feedback.md
-│               ├── billboard/		# Weekly Hot 100 data and lyrics
-│               ├── songwriting/	# Song Exploder transcripts, analysis reports
-│               └── analytics/		# Streaming stats and performance metrics
-├── examples/
-├── tests/
-└── pyproject.toml
+maestro/
+├── README.md
+├── directory_tree.txt
+├── maistro
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   └── __init__.cpython-312.pyc
+│   ├── artists
+│   │   ├── dolla-llama
+│   │   │   ├── memory
+│   │   │   │   ├── feedback
+│   │   │   │   │   ├── cabal_feedback.md
+│   │   │   │   │   ├── hallucinations_feedback.md
+│   │   │   │   │   ├── phone_sex_feedback.md
+│   │   │   │   │   └── scrollin_feedback.md
+│   │   │   │   └── songs
+│   │   │   │       ├── cabal.md
+│   │   │   │       ├── hallucinations.md
+│   │   │   │       ├── phone_sex.md
+│   │   │   │       └── scrollin.md
+│   │   │   └── persona.json
+│   │   └── templates
+│   │       └── persona.json
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── __pycache__
+│   │   │   ├── __init__.cpython-312.pyc
+│   │   │   └── agent.cpython-312.pyc
+│   │   ├── agent.py
+│   │   ├── cli.py
+│   │   ├── memory
+│   │   │   ├── __init__.py
+│   │   │   ├── __pycache__
+│   │   │   │   ├── __init__.cpython-312.pyc
+│   │   │   │   ├── manager.cpython-312.pyc
+│   │   │   │   ├── store.cpython-312.pyc
+│   │   │   │   └── types.cpython-312.pyc
+│   │   │   ├── manager.py
+│   │   │   ├── store.py
+│   │   │   └── types.py
+│   │   ├── memory_db
+│   │   │   └── dolla-llama
+│   │   │       ├── chroma.sqlite3
+│   │   │       └── fd89a4b8-20d8-4773-915d-e5768c0e26e1
+│   │   │           ├── data_level0.bin
+│   │   │           ├── header.bin
+│   │   │           ├── length.bin
+│   │   │           └── link_lists.bin
+│   │   └── utils.py
+│   └── music
+│       ├── __init__.py
+│       ├── lyrics.py
+│       └── prompts.py
+├── poetry.lock
+├── pyproject.toml
+├── test_chat.py
+└── test_memory.py

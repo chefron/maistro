@@ -27,18 +27,11 @@ class MusicAgent:
     
     def _load_artist_config(self) -> dict:
         base_path = Path(__file__).resolve().parent.parent / "artists" / self.artist_name.lower()
-        print(f"Base path: {base_path}")
         config_path = base_path / "persona.json"
-        print(f"Config path: {config_path}")
         
         if config_path.exists():
-            print("persona.json file exists")
             with open(config_path, 'r') as f:
                 return json.load(f)
-            print(f"Loaded config: {config}")
-
-        else:
-            print("persona.json file does not exist")
             
         return {}
     
@@ -86,10 +79,9 @@ If relevant to the conversation, feel free (but not obligated) to naturally draw
         # Get relevant memories using the MemoryManager
         memory_context, results = self.memory.get_relevant_context(message)
 
-         # Debug logging
-        print(f"DEBUG: Got memory context: {'<none>' if not memory_context else memory_context[:100] + '...'}")
+        print(f"Memory context: {'<none>' if not memory_context else memory_context[:100] + '...'}")
         if results:
-            print(f"DEBUG: Found {len(results)} relevant memories with scores:", 
+            print(f"Found {len(results)} relevant memories with scores:", 
                 [f"{r.similarity_score:.3f}" for r in results])
 
         # Construct the system prompt

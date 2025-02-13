@@ -1,5 +1,3 @@
-print(f"Module name is: {__name__}")
-
 from typing import Dict, List, Optional, Union
 from datetime import datetime
 from pathlib import Path
@@ -40,11 +38,9 @@ class MemoryManager:
         filter_metadata: Optional[Dict] = None,
     ) -> List[SearchResult]:
         """Search for similar memories across one or multiple categories"""
-        print("DEBUG: MemoryManager.search called with query:", query)
         available_categories = self.list_categories()
-        print(f"DEBUG: Available categories: {available_categories}")  # Add this
         if not available_categories:
-            print("DEBUG: No categories available")  # Add this
+            print("No categories available")
             return []
         
         # Determine categories to search
@@ -68,12 +64,10 @@ class MemoryManager:
 
         # Sort and filter results
         results.sort(key=lambda x: x.similarity_score, reverse=True)
-        logger.info(f"Pre-filter scores: {[r.similarity_score for r in results]}")
         filtered_results = [
             result for result in results
             if result.similarity_score > min_similarity
         ]
-        logger.info(f"Post-filter scores: {[r.similarity_score for r in filtered_results]}")
 
         return filtered_results[:n_results]
 
@@ -84,8 +78,6 @@ class MemoryManager:
         n_results: int = 3,
     ) -> tuple[str, List[SearchResult]]:
         """Get relevant memory context for a query"""
-        print(f"DEBUG: get_relevant_context called with query: {query}")
-        
         results = self.search(
             query=query,
             category=categories,
