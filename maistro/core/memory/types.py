@@ -16,7 +16,7 @@ class Memory:
 class SearchResult:
     """Represents a search result with its similarity score"""
     memory: Memory
-    similiarty_score: float
+    similarity_score: float
 
 @dataclass
 class MemoryStats:

@@ -1,7 +1,7 @@
 from maistro.core.agent import MusicAgent
 
 def main():
-    agent = MusicAgent("dolla_llama")
+    agent = MusicAgent("dolla-llama")
     print("\nChat with Dolla Llama (type 'exit' to quit)")
     print("-" * 50)
 

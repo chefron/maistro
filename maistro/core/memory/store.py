@@ -1,3 +1,5 @@
+print(f"Module name is: {__name__}")
+
 from chromadb import PersistentClient
 from typing import Dict, List, Optional
 from uuid import uuid4
@@ -8,13 +10,13 @@ from pathlib import Path
 from .types import Memory, SearchResult
 
 os.environ["ANONYMIZED_TELEMETRY"] = "false"
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('maistro.core.memory.store')
 
 class VectorStore:
     """Vector database for storing and searching memories by category."""
     def __init__(self, artist_name: str):
         # Create artist-specific directory
-        self.db_path = Path(f"./memory_db/{artist_name}")
+        self.db_path = Path(__file__).parent.parent / "memory_db" / artist_name
         self.db_path.parent.mkdir(exist_ok=True)
 
         # Create a persistent client with artist-specific path
@@ -31,6 +33,9 @@ class VectorStore:
                     logger.error(f"Error loading collection {name}: {e}")
         except Exception as e:
             logger.error(f"Error loading existing collections: {e}")
+
+        print(f"DEBUG: Initializing VectorStore for {artist_name} at {self.db_path.absolute()}")
+        print(f"DEBUG: Found collections: {self.client.list_collections()}")
 
     def _clean_metadata(self, metadata: Dict) -> Dict:
         """Clean metadata to ensure all values are ChromaDB-compatible types"""
@@ -113,14 +118,18 @@ class VectorStore:
         filter_metadata: Optional[Dict] = None
     ) -> List[SearchResult]:
         """Search for similar memories in a category"""
+        print("DEBUG: About to log search start")  # Debug print
+        print(f"DEBUG: VectorStore.search called for category {category}")
         if category not in self.collections:
-            logger.error(f"Collection {category} not found")
+            print("DEBUG: About to log collection not found")  # Debug print
+            print(f"DEBUG: Category {category} not found in collections: {list(self.collections.keys())}")
             return []
 
         collection = self.collections[category]
 
         try:
             total_docs = len(collection.get()['ids'])
+            logger.info(f"Searching through {total_docs} documents in {category}")
             if total_docs == 0:
                 logger.error("Collection is empty")
                 return []
@@ -146,6 +155,7 @@ class VectorStore:
                 # Calculate similarity score
                 distance = float(results['distances'][0][i])
                 similarity_score = math.exp(-distance)
+                logger.info(f"Score for match: {similarity_score} with distance {distance}")
 
                 search_results.append(SearchResult(
                     memory=memory,

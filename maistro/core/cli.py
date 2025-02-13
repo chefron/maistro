@@ -1,5 +1,43 @@
 from pathlib import Path
 import logging
+
+# Set up logging FIRST, before any other imports
+def setup_logging():
+    # First, clear all existing handlers to start fresh
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    
+    # Create formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(formatter)
+    
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+    root_logger.addHandler(console_handler)
+    
+    # Explicitly configure loggers for our modules
+    loggers = {
+        'maistro': logging.DEBUG,
+        'maistro.core': logging.DEBUG,
+        'maistro.core.memory': logging.DEBUG,
+        'maistro.core.memory.store': logging.DEBUG,
+        'maistro.core.memory.manager': logging.DEBUG,
+    }
+    
+    for name, level in loggers.items():
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        # Let it propagate to root logger
+        logger.propagate = True
+
+# Set up logging before imports
+setup_logging()
+
 import os
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional
@@ -12,7 +50,7 @@ from prompt_toolkit.history import FileHistory
 from maistro.core.agent import MusicAgent
 from maistro.core.memory import MemoryManager
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+# Get logger for this module
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -331,9 +369,12 @@ class MaistroCLI:
 
     def memory_search(self, input_list: List[str]) -> None:
         """Search agent memories"""
+        print("DEBUG: CLI memory_search called with:", input_list)
         if not self.agent:
             logger.info("No agent loaded. Use 'load-agent' first")
             return
+        
+        logger.info("Starting search...")
 
         if len(input_list) < 2:
             logger.info("Please specify a search query")
