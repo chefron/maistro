@@ -246,7 +246,7 @@ class MaistroCLI:
         """Load an artist agent"""
         if len(input_list) < 2:
             logger.info("Please specify an artist name")
-            logger.info("Format: load-agent {artist_name}")
+            logger.info("Format: load-artist {artist_name}")
             return
 
         artist_name = input_list[1]
@@ -254,13 +254,13 @@ class MaistroCLI:
             self.agent = MusicAgent(artist_name)
             logger.info(f"✅ Loaded artist agent: {artist_name}")
         except Exception as e:
-            logger.error(f"Error loading agent: {e}")
+            logger.error(f"Error loading artist: {e}")
 
     def list_agents(self, input_list: List[str]) -> None:
         """List available artist agents"""
         artists_dir = Path(__file__).parent.parent / "artists"
         if not artists_dir.exists():
-            logger.info("No artists directory found")
+            logger.info("No artists found")
             return
 
         artists = []
@@ -269,7 +269,7 @@ class MaistroCLI:
                 artists.append(path.name)
 
         if not artists:
-            logger.info("No artist agents found")
+            logger.info("No artists found")
             return
 
         logger.info("\nAvailable Artists:")
@@ -353,7 +353,8 @@ class MaistroCLI:
             stats = self.agent.memory.get_category_stats(category)
             logger.info(f"\nContents of '{category}':")
             for doc in stats.documents:
-                logger.info(f"\nSource: {doc['source']}")
+                filename = Path(doc['source']).name
+                logger.info(f"\n• {filename}")
                 logger.info(f"Chunks: {doc['chunk_count']}")
                 logger.info(f"Size: {doc['total_size']:,} characters")
         except Exception as e:

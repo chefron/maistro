@@ -34,7 +34,7 @@ class MemoryManager:
         query: str,
         category: Optional[Union[str, List[str]]] = None,
         n_results: int = 5,
-        min_similarity: float = 0.2,
+        min_similarity: float = 0.25,
         filter_metadata: Optional[Dict] = None,
     ) -> List[SearchResult]:
         """Search for similar memories across one or multiple categories"""
