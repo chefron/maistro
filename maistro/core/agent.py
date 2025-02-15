@@ -54,10 +54,9 @@ Desires: {', '.join(config['personality']['desires'])}
 Mental state: {', '.join(config['personality']['mental state'])}
 
 Writing style:
+Rules: {', '.join(config['writing style']['rules'])}
 Tone: {', '.join(config['writing style']['tone'])}
 Vocabulary: {', '.join(config['writing style']['vocabulary'])}
-Rules: {', '.join(config['writing style']['rules'])}
-Topic mix: {config['writing style']['topic_mix']}
 
 Musical style:
 Genres: {', '.join(config['music']['genres'])}
