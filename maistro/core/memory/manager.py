@@ -75,7 +75,7 @@ class MemoryManager:
         self,
         query: str,
         categories: Optional[List[str]] = None,
-        n_results: int = 3,
+        n_results: int = 5,
     ) -> tuple[str, List[SearchResult]]:
         """Get relevant memory context for a query"""
         results = self.search(
@@ -281,49 +281,54 @@ class MemoryManager:
 
     def create_chunks(
         self,
-        file_path: str,
-        category: str,
+        file_path: Optional[str] = None,
+        category: str = None,
         content_type: Optional[str] = None,
         metadata: Optional[Dict] = None,
-        should_chunk: Optional[bool] = None
+        should_chunk: Optional[bool] = None,
+        direct_content: Optional[str] = None # Programmatically generated content, e.g. streaming stats  
     ) -> List[str]:
         """
-        Process and store a document, potentially splitting it into chunks
+        Process and store content, either from a file or direct text input
 
         Args:
-            file_path: Path to the document
+            file_path: Path to the document (optional if direct_context provided)
             category: Memory category to store in
             content_type: Type of content (e.g., 'lyrics', 'analysis', 'feedback')
             metadata: Additional metadata
             should_chunk: Override automatic chunking decision
+            direct_content: Direct text input (optional if file_path provided)
         """
+        if not (file_path or direct_content):
+            raise ValueError("Either file_path or direct_content must be provided")
 
         memory_ids = []
-        file_extension = Path(file_path).suffix[1:].lower()
         base_metadata = {
-            "source": file_path,
-            "document_type": file_extension,
+            **({"source": file_path, "document_type": Path(file_path).suffix[1:].lower()} if file_path 
+            else {"source": "direct_input"}),  # Set a default source for text content
             "content_type": content_type,
             **(metadata or {})
         }
-
+        
         try:
-            # Handle different file types
-            if file_extension == 'pdf':
-                reader = PdfReader(file_path)
-                text = ""
-                for i, page in enumerate(reader.pages):
-                    page_text = page.extract_text()
-                    if page_text.strip():
-                        text += f"Page {i+1} of {len(reader.pages)}:\n{page_text}\n\n"
-                base_metadata.update({
-                    "total_pages": len(reader.pages),
-                    "has_text": bool(text.strip())
-                })
+            # Get content from different file types or direct input (text)
+            if direct_content:
+                text = direct_content
             else:
-                # Default to text reading for all other files
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    text = file.read()
+                if file_path.endswith('.pdf'):
+                    reader = PdfReader(file_path)
+                    text = ""
+                    for i, page in enumerate(reader.pages):
+                        page_text = page.extract_text()
+                        if page_text.strip():
+                            text += f"Page {i+1} of {len(reader.pages)}:\n{page_text}\n\n"
+                    base_metadata.update({
+                        "total_pages": len(reader.pages),
+                        "has_text": bool(text.strip())
+                    })
+                else:
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        text = file.read()
 
             # Determine if we should chunk this document
             if should_chunk is None:

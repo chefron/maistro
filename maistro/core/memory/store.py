@@ -148,6 +148,8 @@ class VectorStore:
                 # Calculate similarity score
                 distance = float(results['distances'][0][i])
                 similarity_score = math.exp(-distance)
+                if category == "streaming_stats":
+                    similarity_score *= 1.5  # Boost streaming stats scores
 
                 search_results.append(SearchResult(
                     memory=memory,
