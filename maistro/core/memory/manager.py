@@ -152,7 +152,7 @@ class MemoryManager:
     def split_document(
         self,
         text: str,
-        chunk_size: int = 500,
+        chunk_size: int = 1024,
         chunk_overlap: int = 100,
         respect_boundaries: bool = True,
         content_type: Optional[str] = None,
@@ -176,7 +176,7 @@ class MemoryManager:
                 if len(text) < chunk_size:
                     return [{'header': None, 'content': text.strip()}]
             elif content_type == 'analysis':
-                chunk_size = max(chunk_size, 800) # Larger chunks for analysis
+                chunk_size = max(chunk_size, 2000) # Larger chunks for analysis
 
         sections = []
 

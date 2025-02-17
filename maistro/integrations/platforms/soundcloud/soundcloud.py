@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 import os
 from dotenv import load_dotenv
@@ -31,9 +31,15 @@ def get_user_tracks_data(user_id: str, client_id: str):
             
             # Process each track in the collection
             for track in data['collection']:
-                created_at = datetime.strptime(track['created_at'], '%Y-%m-%dT%H:%M:%SZ')
+                created_at = datetime.strptime(
+                    track['created_at'], 
+                    '%Y-%m-%dT%H:%M:%SZ'
+                    ).replace(tzinfo=timezone.utc)
+                
                 formatted_date = created_at.strftime('%B %d, %Y')
-                days = (datetime.now() - created_at).days
+
+                current_time = datetime.now(timezone.utc)
+                days = (current_time - created_at).days
                 days_since_creation = days if days > 0 else 1
 
                 track_info = {

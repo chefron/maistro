@@ -456,19 +456,19 @@ class MaistroCLI:
             logger.info(f"✅ Deleted {chunks_deleted} chunks from '{filename}'")
         else:
             logger.info(f"No document found matching '{filename}' in '{category}'")
-
+        
     def update_stats(self, input_list: List[str]) -> None:
-        "Update streaming statistics in memory"
+        """Update streaming statistics in memory"""
         if not self.agent:
             logger.info("No artist loaded. Use 'load-artist' first")
             return
         
         from maistro.core.analytics import PlatformStats
         stats_handler = PlatformStats(self.agent.memory)
-        success = stats_handler.update_soundcloud_stats()
-
+        success = stats_handler.update_all_stats()
+        
         if success:
-            logger.info("✅ Updated streaming statistics")
+            logger.info("✅ Streaming statistics updated successfully")
         else:
             logger.error("Failed to update streaming statistics")
 
