@@ -4,6 +4,7 @@ import os
 from maistro.core.memory.manager import MemoryManager
 from maistro.integrations.platforms.soundcloud.soundcloud import get_user_tracks_data, format_track_stats
 from maistro.integrations.platforms.youtube.youtube import get_youtube_channel_stats, get_channel_videos, format_video_stats
+from maistro.integrations.platforms.spotify.spotify import get_spotify_artist_stats, format_artist_stats
 
 import logging
 logger = logging.getLogger('maistro.core.analytics')
@@ -54,7 +55,6 @@ class PlatformStats:
         api_key = api_key or os.getenv('YOUTUBE_API_KEY')
         
         try:
-            # Get channel and video data
             channel_stats = get_youtube_channel_stats(channel_id, api_key)
             if not channel_stats:
                 return False
@@ -85,26 +85,71 @@ class PlatformStats:
         except Exception as e:
             logger.error(f"Error updating YouTube stats: {e}")
             return False
+
+    def update_spotify_stats(self, artist_id: str = None, client_id: str = None, client_secret: str = None ) -> bool:
+        """Fetch, format, and store spotify stats"""
+        artist_id = artist_id or os.getenv('SPOTIFY_ARTIST_ID')
+        client_id = client_id or os.getenv('SPOTIFY_CLIENT_ID')
+        client_secret = client_secret or os.getenv('SPOTIFY_CLIENT_SECRET')
+
+        try:
+            artist_stats = get_spotify_artist_stats(artist_id, client_id, client_secret)
+            if not artist_stats:
+                return False
+            
+            formatted_stats = format_artist_stats(artist_stats)
+            print(formatted_stats)
+
+            metadata = {
+                "platform": "spotify",
+                "timestamp": datetime.now().isoformat(),
+                "source": "spotify_stats",
+                "content_type": "performance_metrics",
+            }
+
+            memory_ids = self.memory_manager.create_chunks(
+                category="streaming_stats",
+                direct_content=formatted_stats,
+                content_type="analysis",
+                metadata=metadata
+            )
+            
+            return bool(memory_ids)
         
+        except Exception as e:
+            logger.error(f"Error updating Spotify stats: {e}")
+            return False
+
     def update_all_stats(self) -> bool:
         """Update stats from all platforms and clear old stats first"""
         # Clear existing stats before updating
         self.memory_manager.remove_category("streaming_stats")
 
-        # Update all platforms
-        success = False
+        platform_results = {
+            'soundcloud': False,
+            'youtube': False,
+            'spotify': False
+        }
 
-        if not self.update_soundcloud_stats():
-            logger.error("Failed to update SoundCloud stats")
-        else:
-            success = True
-            
-        if not self.update_youtube_stats():
-            logger.error("Failed to update YouTube stats")
-        else:
-            success = True
-            
-        return success
+        # Uodate each platform
+        if self.update_soundcloud_stats():
+            platform_results['soundcloud'] = True
+        if self.update_youtube_stats():
+            platform_results['youtube'] = True
+        if self.update_spotify_stats():
+            platform_results['spotify'] = True
+        
+        # Summarize results
+        successful = [platform for platform, result in platform_results.items() if result]
+        failed = [platform for platform, result in platform_results.items() if not result]
+
+        if successful:
+            logger.info(f"Successfully updated stats for: {', '.join(successful)}")
+        if failed:
+            logger.info(f"Failed to update stats for: {', '.join(failed)}")
+
+        # Return True if any platform succeeded
+        return bool(successful)
 
     # TODO: Keep for potential search optimization. Adding common question patterns
     # to the stored text might improve semantic search results by providing more

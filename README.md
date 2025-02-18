@@ -1,1 +1,3 @@
-# Maistro\n\nA lightweight agent framework for AI musicians.
+# Maistro
+
+A lightweight agent framework for AI musicians.
