@@ -38,9 +38,9 @@ class PlatformStats:
             }
 
             memory_ids = self.memory_manager.create_chunks(
-                category="streaming_stats",
+                category="metrics",
                 direct_content=formatted_stats,
-                content_type="analysis",
+                content_type="metrics",
                 metadata=metadata
             )
             
@@ -75,9 +75,9 @@ class PlatformStats:
             }
         
             memory_ids = self.memory_manager.create_chunks(
-                category="streaming_stats",
+                category="metrics",
                 direct_content=formatted_stats,
-                content_type="analysis",
+                content_type="metrics",
                 metadata=metadata
             )
             
@@ -109,9 +109,9 @@ class PlatformStats:
             }
 
             memory_ids = self.memory_manager.create_chunks(
-                category="streaming_stats",
+                category="metrics",
                 direct_content=formatted_stats,
-                content_type="analysis",
+                content_type="metrics",
                 metadata=metadata
             )
             
@@ -147,9 +147,9 @@ class PlatformStats:
             }
 
             memory_ids = self.memory_manager.create_chunks(
-                category="streaming_stats",
+                category="metrics",
                 direct_content=formatted_stats,
-                content_type="analysis",
+                content_type="metrics",
                 metadata=metadata
             )
         
@@ -162,8 +162,8 @@ class PlatformStats:
     def update_all_stats(self) -> bool:
         """Update stats from all platforms and clear old stats first"""
         # First try to delete existing stats
-        if "streaming_stats" in self.memory_manager.list_categories():
-            if not self.memory_manager.remove_category("streaming_stats"):
+        if "metrics" in self.memory_manager.list_categories():
+            if not self.memory_manager.remove_category("metrics"):
                 logger.error("Failed to clear existing stats")
                 return False
 

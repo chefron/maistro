@@ -91,7 +91,7 @@ class MaistroCLI:
                 name="memory-upload",
                 description="Upload documents to artist's memory",
                 tips=["Format: memory-upload {category} file1 [file2...]",
-                      "Example categories: songs, feedback, analytics"],
+                      "Example categories: songs, feedback, analytics, metrics, analysis"],
                 handler=self.memory_upload,
                 aliases=['upload-memory']
             )
@@ -201,6 +201,7 @@ class MaistroCLI:
     
     def _handle_command(self, input_string: str) -> None:
         """Parse and handle a command input"""
+
         input_list = input_string.split()
         if not input_list:
             return
@@ -431,10 +432,10 @@ class MaistroCLI:
                 logger.info("✅ All memories wiped")
             else:
                 logger.error("Failed to wipe memories")
-        
+                
         # Wipe category
-        category = input_list[1]
-        if len(input_list) == 2:
+        elif len(input_list) == 2:
+            category = input_list[1]
             if category not in self.agent.memory.list_categories():
                 logger.info(f"Category '{category}' not found")
                 return
@@ -446,16 +447,20 @@ class MaistroCLI:
             
             result = self.agent.memory.wipe_category(category)
             if result['success']:
-                logger.info (f"✅ Category '{category}' wiped")
-            return
-        
+                logger.info(f"✅ Category '{category}' wiped")
+                
         # Wipe specific document
-        filename = input_list[2]
-        chunks_deleted = self.agent.memory.wipe_document(category, filename)
-        if chunks_deleted > 0:
-            logger.info(f"✅ Deleted {chunks_deleted} chunks from '{filename}'")
+        elif len(input_list) == 3:
+            category = input_list[1]
+            filename = input_list[2]
+            chunks_deleted = self.agent.memory.wipe_document(category, filename)
+            if chunks_deleted > 0:
+                logger.info(f"✅ Deleted {chunks_deleted} chunks from '{filename}'")
+            else:
+                logger.info(f"No document found matching '{filename}' in '{category}'")
+        
         else:
-            logger.info(f"No document found matching '{filename}' in '{category}'")
+            logger.info("Invalid number of arguments for memory-wipe")
         
     def update_stats(self, input_list: List[str]) -> None:
         """Update streaming statistics in memory"""

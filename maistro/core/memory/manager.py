@@ -166,17 +166,21 @@ class MemoryManager:
             respect_boundaries: Try to break at sentence/paragraph boundaries
             content_type: Type of content e.g., 'lyrics', 'analysis', 'feedback') is used to adjust chunking behavior
         """
-
+        """ COMMENTED OUT FOR TESTING
         # Adjust chunk parameters based on content type
         if content_type:
             if content_type == 'lyrics':
-                chunk_size = min(chunk_size, 300) # Smaller chunks for lyrics to preserve line breaks and stanzas
+                # Smaller chunks for lyrics to preserve line breaks and stanzas
+                chunk_size = min(chunk_size, 300) 
                 respect_boundaries = True
             elif content_type == 'feedback':
                 if len(text) < chunk_size:
                     return [{'header': None, 'content': text.strip()}]
             elif content_type == 'analysis':
-                chunk_size = max(chunk_size, 2000) # Larger chunks for analysis
+                chunk_size = max(chunk_size, 2000)
+            elif content_type == 'metrics':
+                chunk_size = max(chunk_size, 2000)
+        """
 
         sections = []
 
@@ -329,17 +333,19 @@ class MemoryManager:
                 else:
                     with open(file_path, 'r', encoding='utf-8') as file:
                         text = file.read()
-
+            
             # Determine if we should chunk this document
             if should_chunk is None:
-                should_chunk = len(text) > 1000 # Default threshold
+                should_chunk = len(text) > 1024 # Default threshold
 
+            """COMMENTED OUT FOR TESTING
                 # Adjust based on content type
                 if content_type == 'feedback' and len(text) < 500:
                     should_chunk = False
                 elif content_type == 'analysis':
                     should_chunk = True
-            
+            """
+                    
             # Process content
             if should_chunk:
                 sections = self.split_document(
@@ -469,11 +475,18 @@ class MemoryManager:
         """Delete an entire category of memories"""
         try:
             if category in self.store.collections:
+                logger.info(f"Attempting to delete collection {category}")
+                logger.info(f"Current directory contents: {list(self.store.db_path.iterdir())}")
+                
                 # Delete the collection from ChromaDB
                 self.store.client.delete_collection(category)
+                
                 # Remove from our collections dict
                 del self.store.collections[category]
+                
+                logger.info(f"Directory contents after deletion: {list(self.store.db_path.iterdir())}")
                 return True
+            
             return False
         except Exception as e:
             logger.error(f"Error deleting category {category}: {e}")
@@ -508,7 +521,24 @@ class MemoryManager:
         try:
             for category in self.list_categories():
                 self.remove_category(category)
+
+            # Close the existing client connection
+            self.store.client._client.close()
+
+            # After proper deletion, clean up any remaining files
+            import shutil
+            import os
+            if self.store.db_path.exists():
+                shutil.rmtree(self.store.db_path)
+                self.store.db_path.mkdir(exist_ok=True)
+                # Ensure directory has write permissions
+                os.chmod(self.store.db_path, 0o777)
+                
+            # Reinitialize the store
+            self.store = VectorStore(self.artist_name)
+
             return True
+        
         except Exception as e:
             logger.error(f"Error wiping all memories: {e}")
             return False

@@ -15,6 +15,8 @@ class VectorStore:
     def __init__(self, artist_name: str):
         # Create path to artist's memory directory
         self.db_path = Path(__file__).parent.parent.parent / "artists" / artist_name.lower() / "memory" / "memory_db"
+        logger.info(f"Initializing VectorStore with path: {self.db_path}")
+        
         # Create memory_db directory if it doesn't exist
         self.db_path.mkdir(exist_ok=True)
 
@@ -25,9 +27,11 @@ class VectorStore:
         # Load existing collections
         try:
             collection_names = self.client.list_collections()
+            logger.info(f"Found existing collections: {collection_names}")
             for name in collection_names:
                 try:
                     self.collections[name] = self.client.get_collection(name)
+                    logger.info(f"Loaded collection: {name}")
                 except Exception as e:
                     logger.error(f"Error loading collection {name}: {e}")
         except Exception as e:
@@ -50,10 +54,12 @@ class VectorStore:
     def add(self, category: str, content: str, metadata: Dict) -> Memory:
         """Add a new memory"""
         if category not in self.collections:
+            logger.info(f"Creating new collection: {category}")
             self.collections[category] = self.client.create_collection(category)
         
         collection = self.collections[category]
         memory_id = str(uuid4())
+        logger.info(f"Adding memory {memory_id} to collection {category}")
 
         try:
             clean_metadata = self._clean_metadata(metadata)
@@ -148,8 +154,8 @@ class VectorStore:
                 # Calculate similarity score
                 distance = float(results['distances'][0][i])
                 similarity_score = math.exp(-distance)
-                if category == "streaming_stats":
-                    similarity_score *= 1.5  # Boost streaming stats scores
+                if category == "metrics":
+                    similarity_score *= 1.4  # Boost scores for metrics to keep at top of mind
 
                 search_results.append(SearchResult(
                     memory=memory,
@@ -168,6 +174,7 @@ class VectorStore:
             return False
         
         collection = self.collections[category]
+        logger.info(f"Deleting memory {memory_id} from collection {category}")
 
         try:
             collection.delete(ids=[memory_id])
