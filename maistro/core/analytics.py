@@ -5,6 +5,7 @@ from maistro.core.memory.manager import MemoryManager
 from maistro.integrations.platforms.soundcloud.soundcloud import get_user_tracks_data, format_track_stats
 from maistro.integrations.platforms.youtube.youtube import get_youtube_channel_stats, get_channel_videos, format_video_stats
 from maistro.integrations.platforms.spotify.spotify import get_spotify_artist_stats, format_artist_stats
+from maistro.integrations.platforms.dexscreener.dexscreener import get_token_data, format_token_stats
 
 import logging
 logger = logging.getLogger('maistro.core.analytics')
@@ -119,16 +120,58 @@ class PlatformStats:
         except Exception as e:
             logger.error(f"Error updating Spotify stats: {e}")
             return False
+        
+    def update_token_stats(self, chain_id: str = None, token_address: str = None) -> bool:
+        """Fetch, format, and store token stats from DexScreener"""
+        chain_id = chain_id or os.getenv('TOKEN_CHAIN')
+        token_address = token_address or os.getenv('TOKEN_ADDRESS')
+
+        if not token_address or not chain_id:
+            logger.info("No token configuration found - skipping token stats")
+            return False
+        
+        try:
+            token_data = get_token_data(chain_id, token_address)
+            if not token_data:
+                return False
+            
+            formatted_stats = format_token_stats(token_data)
+            print(formatted_stats)
+
+            metadata = {
+                "platform": "dexscreener",
+                "chain": chain_id,
+                "timestamp": datetime.now().isoformat(),
+                "source": "token_stats",
+                "content_type": "token_metrics"
+            }
+
+            memory_ids = self.memory_manager.create_chunks(
+                category="streaming_stats",
+                direct_content=formatted_stats,
+                content_type="analysis",
+                metadata=metadata
+            )
+        
+            return bool(memory_ids)
+        
+        except Exception as e:
+            logger.error(f"Error updating token stats: {e}")
+            return False
 
     def update_all_stats(self) -> bool:
         """Update stats from all platforms and clear old stats first"""
-        # Clear existing stats before updating
-        self.memory_manager.remove_category("streaming_stats")
+        # First try to delete existing stats
+        if "streaming_stats" in self.memory_manager.list_categories():
+            if not self.memory_manager.remove_category("streaming_stats"):
+                logger.error("Failed to clear existing stats")
+                return False
 
         platform_results = {
             'soundcloud': False,
             'youtube': False,
-            'spotify': False
+            'spotify': False,
+            'dexscreener': False
         }
 
         # Uodate each platform
@@ -138,6 +181,8 @@ class PlatformStats:
             platform_results['youtube'] = True
         if self.update_spotify_stats():
             platform_results['spotify'] = True
+        if self.update_token_stats():
+            platform_results['dexscreener'] = True
         
         # Summarize results
         successful = [platform for platform, result in platform_results.items() if result]

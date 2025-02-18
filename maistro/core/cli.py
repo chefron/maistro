@@ -137,7 +137,7 @@ class MaistroCLI:
             Command(
                 name="update-stats",
                 description="Update streaming stats in memory",
-                tips=["Updates and stores latest streaming statistics in memory from connected platforms"],
+                tips=["Updates and stores latest streaming and token statistics in memory from connected platforms"],
                 handler=self.update_stats,
                 aliases=['stats-update']
             )

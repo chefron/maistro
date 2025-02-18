@@ -16,6 +16,7 @@ chromadb = "^0.6.3"
 requests = "^2.32.3"
 datetime = "^5.5"
 google-api-python-client = "^2.161.0"
+spotipy = "^2.25.0"
 
 [build-system]
 requires = ["poetry-core"]
