@@ -153,7 +153,7 @@ class MemoryManager:
         self,
         text: str,
         chunk_size: int = 1024,
-        chunk_overlap: int = 100,
+        chunk_overlap: int = 200,
         respect_boundaries: bool = True,
         content_type: Optional[str] = None,
     ) -> List[Dict[str, Optional[str]]]:
