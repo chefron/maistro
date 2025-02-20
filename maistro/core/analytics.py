@@ -2,10 +2,10 @@ from datetime import datetime
 from dotenv import load_dotenv
 import os
 from maistro.core.memory.manager import MemoryManager
-from maistro.integrations.platforms.soundcloud.soundcloud import get_user_tracks_data, format_track_stats
-from maistro.integrations.platforms.youtube.youtube import get_youtube_channel_stats, get_channel_videos, format_video_stats
-from maistro.integrations.platforms.spotify.spotify import get_spotify_artist_stats, format_artist_stats
-from maistro.integrations.platforms.dexscreener.dexscreener import get_token_data, format_token_stats
+from maistro.integrations.soundcloud.soundcloud import get_user_tracks_data, format_track_stats
+from maistro.integrations.youtube.analytics import get_youtube_channel_stats, get_channel_videos, format_video_stats
+from maistro.integrations.spotify.spotify import get_spotify_artist_stats, format_artist_stats
+from maistro.integrations.dexscreener.dexscreener import get_token_data, format_token_stats
 
 import logging
 logger = logging.getLogger('maistro.core.analytics')
