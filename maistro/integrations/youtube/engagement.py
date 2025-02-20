@@ -1,4 +1,3 @@
-from datetime import datetime
 import os
 import logging
 import threading
@@ -11,6 +10,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from dotenv import load_dotenv
 
+load_dotenv()
+
 logger = logging.getLogger('maistro.integrations.youtube.engagement')
 
 def setup_oauth(client_id: str, client_secret: str) -> Optional[str]:
@@ -21,7 +22,10 @@ def setup_oauth(client_id: str, client_secret: str) -> Optional[str]:
                 "installed": {
                     "client_id": client_id,
                     "client_secret": client_secret,
-                    "redirect_uris": ["http://localhost"],
+                    "redirect_uris": [
+                        "http://localhost:8080",
+                        "http://localhost"
+                    ],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                 }
@@ -29,7 +33,7 @@ def setup_oauth(client_id: str, client_secret: str) -> Optional[str]:
             scopes=['https://www.googleapis.com/auth/youtube.force-ssl']
         )
 
-        credentials = flow.run_local_server(port=0, open_brower=True)
+        credentials = flow.run_local_server(port=8080, open_browser=True)
         return credentials.refresh_token
     
     except Exception as e:
@@ -83,6 +87,7 @@ def get_channel_id() -> Optional[str]:
     
     except Exception as e:
         logger.error(f"Failed to get channel ID: {e}")
+        return None
 
 def get_recent_comments(channel_id: str, count: int = 100) ->List[Dict]:
     """Get recent comments from all videos on a channel"""
@@ -97,7 +102,7 @@ def get_recent_comments(channel_id: str, count: int = 100) ->List[Dict]:
 
         while len(comments) < count:
             response = youtube.commentThreads().list(
-                part='snippet, replies',
+                part='snippet,replies',
                 allThreadsRelatedToChannelId=channel_id,
                 maxResults=min(100, count - len(comments)),
                 pageToken=next_page_token,
@@ -144,7 +149,7 @@ def get_recent_comments(channel_id: str, count: int = 100) ->List[Dict]:
 def post_comment_reply(comment_id: str, reply_text: str) -> bool:
     """Post a reply to a YouTube comment"""
     try:
-        youtube = get_oauth_client
+        youtube = get_oauth_client()
         if not youtube:
             return False
         
@@ -167,9 +172,31 @@ def post_comment_reply(comment_id: str, reply_text: str) -> bool:
 class CommentMonitor:
     """Monitors YouTube channel for new comments"""
 
-    def __init__(self):
-        self.polling_thread = None
-        self.running = False
+    def __init__(self): 
+        self._polling_thread = None
+        self._running = False
+        self._processed_comments = set()
+
+    def initialize_oauth(self) -> bool:
+        """Set up OAuth credentials if needed"""
+        if not os.getenv('YOUTUBE_REFRESH_TOKEN'):
+            logger.info("No refresh token found - performing initial OAuth setup...")
+            client_id = os.getenv('YOUTUBE_CLIENT_ID')
+            client_secret = os.getenv('YOUTUBE_CLIENT_SECRET')
+            
+            if not client_id or not client_secret:
+                logger.error("Please set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in your .env file")
+                return False
+                
+            refresh_token = setup_oauth(client_id, client_secret)
+            if refresh_token:
+                logger.info(f"Got refresh token: {refresh_token}")
+                logger.info("Please add this to your .env file as YOUTUBE_REFRESH_TOKEN=<token>")
+                return False
+            else:
+                logger.error("Failed to get refresh token")
+                return False
+        return True
 
     def start(self, callback: Callable[[Dict], None], interval: int = 60) -> bool:
         """
@@ -177,7 +204,7 @@ class CommentMonitor:
 
         Args:
             callback: Function to call with new comments
-            interval: Seconds between chunks (defaul 60)
+            interval: Seconds between chunks (default 60)
         """
 
         if self._running:
@@ -188,4 +215,89 @@ class CommentMonitor:
         if not channel_id:
             logger.error("Could not get channel ID")
             return False
+
+        def poll_comments():
+            while self._running:
+                try: 
+                    logger.info("Checking for new YouTube comments")
+                    comments = get_recent_comments(channel_id)
+
+                    # Filter for comments we haven't processed yet
+                    new_comments = [
+                        comment for comment in comments
+                        if comment['id'] not in self._processed_comments
+                    ]
+
+                    if new_comments:
+                        logger.info(f"Found {len(new_comments)} unprocessed comments")
+                        for comment in new_comments:
+                            try:
+                                callback(comment)
+                                self._processed_comments.add(comment['id'])
+                            except Exception as e:
+                                logger.error(f"Error in comment callback: {e}")
+
+                    else:
+                        print("No new comments since last check")  # Add this
+
+                    print(f"Waiting {interval} seconds before next check...")
+                    time.sleep(interval)
+                
+                except Exception as e:
+                    logger.error(f"Error in comment polling: {e}")
+                    time.sleep(interval)
+
+        try:
+            self._running = True
+            self._polling_thread = threading.Thread(target=poll_comments, daemon=True)
+            self._polling_thread.start()
+            logger.info("Started YouTube comment monitoring")
+            return True
         
+        except Exception as e:
+            self._running = False
+            logger.error(f"Failed to start monitoring: {e}")
+            return False
+    
+    def stop(self) -> bool:
+        "Stop monitoring for new comments"
+        if not self._running:
+            logger.info("Monitor is not running")
+            return False
+
+        try:
+            self._running = False
+            self._polling_thread = None
+            logger.info("Stopped YouTube comment monitoring")
+            return True
+        
+        except Exception as e:
+            logger.error(f"Error stopping monitoring: {e}")
+            return False
+        
+if __name__ == "__main__":
+    # Example usage
+    load_dotenv()
+
+    def handle_comment(comment):
+        print(f"\nNew comment from {comment['author']}:")
+        print(f"Text: {comment['text']}")
+        print(f"Video: {comment['video_id']}")
+
+        # Example auto-reply
+        reply = f"Thanks for your comment, {comment['author']}!"
+        if post_comment_reply(comment['id'], reply):
+            print("Reply posted successfully!")
+        else:
+            print("Failed to post reply")
+
+    # Start monitoring
+    monitor = CommentMonitor()
+    if monitor.start(handle_comment):
+        print("\nMonitoring started! Press Crtl+C to stop...")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            monitor.stop()
+            print("\nMonitoring stopped!")
