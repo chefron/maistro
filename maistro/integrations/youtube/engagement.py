@@ -2,13 +2,16 @@ import os
 import logging
 import threading
 import time
-from typing import Dict, List, Optional, Callable
+import io
+from typing import Dict, List, Optional, Callable, Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaIoBaseDownload
 from dotenv import load_dotenv
+from maistro.core.agent import MusicAgent
 
 load_dotenv()
 
@@ -229,7 +232,7 @@ class CommentMonitor:
                     ]
 
                     if new_comments:
-                        logger.info(f"Found {len(new_comments)} unprocessed comments")
+                        print(f"Found {len(new_comments)} unprocessed comments")
                         for comment in new_comments:
                             try:
                                 callback(comment)
@@ -275,26 +278,143 @@ class CommentMonitor:
             logger.error(f"Error stopping monitoring: {e}")
             return False
         
+class AgentResponder:
+    """Manages agent-based automatic responses to YouTube comments"""
+
+    def __init__(self, agent):
+        self.agent = agent
+        self.monitor = CommentMonitor()
+        
+    def get_video_captions(self, video_id: str) -> Optional[str]:
+        """Get captions for a video to provide context"""
+        try:
+            youtube = get_oauth_client()
+            if not youtube:
+                return None
+            
+            captions_text = None
+
+            # Retrieve captions list
+            captions_response = youtube.captions().list(
+                part="id",
+                videoId=video_id
+            ).execute()
+
+            # Check if captions exist
+            if 'items' in captions_response and captions_response['items']:
+                caption_id = captions_response['items'][0]['id']  # Get the first caption track
+                print(f"Found Caption ID: {caption_id}")
+
+                # Download captions using MediaIoBaseDownload
+                request = youtube.captions().download(id=caption_id, tfmt='srt')
+                fh = io.BytesIO()
+                downloader = MediaIoBaseDownload(fh, request)
+
+                done = False
+                while not done:
+                    _, done = downloader.next_chunk()
+
+                captions_text = fh.getvalue().decode("utf-8")  # Decode bytes to string
+                print(captions_text)
+
+                return self._clean_captions(captions_text)
+
+            else:
+                print(f"No captions found for video {video_id}")
+
+            return self._clean_captions(captions_text)
+        
+        except Exception as e:
+            logger.error(f"Failed to get captions for video {video_id}: {e}")
+            return None
+        
+    def _clean_captions(self, captions: str) -> str:
+        """Extract readable text from SRT formatted captions.
+        
+        SRT format looks like:
+            1
+            00:00:01,000 --> 00:00:04,000
+            This is the actual caption text
+            
+            2
+            00:00:05,000 --> 00:00:09,000
+            More caption text here
+        """
+        if not captions:
+            return None
+        
+        try:
+            print("\nRaw captions:")
+            print(captions)
+
+            subtitle_lines = []
+            for line in captions.split('\n'):
+                line = line.strip()
+                # Skip if line is:
+                # - A timestamp (contains -->)
+                is_timestamp = '-->' in line
+                # - A subtitle number (just digits)
+                is_subtitle_number = line.isdigit()
+                # - Empty
+                is_empty = not line
+                
+                if not (is_timestamp or is_subtitle_number or is_empty):
+                    subtitle_lines.append(line)
+            return ' '.join(subtitle_lines)
+        
+        except Exception as e:
+            logger.error(f"Failed to clean captions: {e}")
+            return None
+
+    def handle_comment(self, comment: Dict[str, Any]) -> None:
+        """Process a new comment and generate a response"""
+        try:
+            logger.info(f"\nProcessing comment from {comment['author']}")
+            logger.info(f"Comment: {comment['text']}")
+
+            # Get video context from captions if available
+            context = self.get_video_captions(comment['video_id'])
+
+            if context:
+                print("Cleaned video captions:")
+                print(context)
+            else:
+                print("No captions available for this video.")
+
+            context_msg = f"\nVideo context: {context}" if context else "\nNo video context available"
+
+            # Construct prompt for the agent
+            prompt = f"""Please help me respond to this YouTube comment:
+
+From: {comment['author']}
+Comment: {comment['text']}
+Video captions: {context_msg}
+
+Please write a concise response to the comment. If video captions are provided, you can use them for context, but don't feel obligated to do so."""
+
+            # Generate response using the agent
+            response = self.agent.chat(prompt)
+
+            # Post the response
+            if post_comment_reply(comment['id'], response):
+                logger.info(f"✅ Posted response: {response}")
+            else:
+                logger.error("Failed to post response")
+
+        except Exception as e:
+            logger.error(f"Error handling comment: {e}")
+      
 if __name__ == "__main__":
     # Example usage
     load_dotenv()
 
-    def handle_comment(comment):
-        print(f"\nNew comment from {comment['author']}:")
-        print(f"Text: {comment['text']}")
-        print(f"Video: {comment['video_id']}")
-
-        # Example auto-reply
-        reply = f"Thanks for your comment, {comment['author']}!"
-        if post_comment_reply(comment['id'], reply):
-            print("Reply posted successfully!")
-        else:
-            print("Failed to post reply")
+    agent = MusicAgent("dolla-llama")  # Replace with the appropriate artist name
+    responder = AgentResponder(agent)
 
     # Start monitoring
     monitor = CommentMonitor()
-    if monitor.start(handle_comment):
-        print("\nMonitoring started! Press Crtl+C to stop...")
+    if monitor.start(responder.handle_comment):
+        print("\nMonitoring started! Press Ctrl+C to stop...")
         try:
             while True:
                 time.sleep(1)
