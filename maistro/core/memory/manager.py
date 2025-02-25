@@ -152,7 +152,7 @@ class MemoryManager:
     def split_document(
         self,
         text: str,
-        chunk_size: int = 1024,
+        chunk_size: int = 2000,
         chunk_overlap: int = 200,
         respect_boundaries: bool = True,
         content_type: Optional[str] = None,

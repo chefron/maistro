@@ -1,150 +1,142 @@
-from datetime import datetime, timezone, date
+import sqlite3
+import json
+from datetime import datetime, timedelta
 import os
-import logging
-from typing import Dict, List, Optional, Tuple
-import requests
-from requests_oauthlib import OAuth1Session
 from dotenv import load_dotenv
-
-from maistro.core.memory.types import Memory, SearchResult
-from maistro.core.memory.manager import MemoryManager
+import requests
+from requests_oauthlib import OAuth1
 
 load_dotenv()
-logger = logging.getLogger('maistro.integrations.platforms.twitter')
 
-class TwitterAPI:
-    """Handles Twitter API interactions with memory-based caching"""
+class XMusicAgent:
+    def __init__(self, agent_name, refresh_interval_minutes=1440): # Default refresh: 1 day (1440 minutes)
+        self.agent_name = agent_name
+        self.refresh_interval = refresh_interval_minutes * 60  # Convert minutes to seconds
+        self.cache_db = f"{agent_name}_cache.db"
+        self.usage_log = f"{agent_name}_usage.json"
 
-    def __init__(self, memory_manager):
-        self.api_key = os.getenv('TWITTER_API_KEY')
-        self.api_secret = os.getenv('TWITTER_API_SECRET')
-        self.access_token = os.getenv('TWITTER_ACCESS_TOKEN')
-        self.access_secret = os.getenv('TWITTER_ACCESS_SECRET')
+        # Load API credentials from .env
+        self.api_key = os.getenv("TWITTER_API_KEY")
+        self.api_secret = os.getenv("TWITTER_API_SECRET")
+        self.access_token = os.getenv("TWITTER_ACCESS_TOKEN")
+        self.access_secret = os.getenv("TWITTER_ACCESS_SECRET")
 
-        # Check for missing credentials
-        missing_creds = []
-        if not self.api_key:
-            missing_creds.append("TWITTER_API_KEY")
-        if not self.api_secret:
-            missing_creds.append("TWITTER_API_SECRET")
-        if not self.access_token:
-            missing_creds.append("TWITTER_ACCESS_TOKEN")
-        if not self.access_secret:
-            missing_creds.append("TWITTER_ACCESS_SECRET")
-
-        if missing_creds:
-            raise ValueError(f"Missing required Twitter credentials: {', '.join(missing_creds)}")
-        
-        self.oauth = OAuth1Session(
-            client_key=self.api_key,
+        # OAuth 1.0a setup for X API
+        self.auth = OAuth1(
+            self.api_key,
             client_secret=self.api_secret,
             resource_owner_key=self.access_token,
             resource_owner_secret=self.access_secret
         )
 
-        self.memory = memory_manager
+        # API limits (fetched dynamically)
+        self.read_limit = None
+        self.post_limit = None
+        self.reads_remaining = None
+        self.posts_remaining = None
+        self.reset_time = None # Unix timestamp for limit reset
 
-         # Initialize rate limit tracking
-        self._update_rate_limits()
+        # Initialize cache and usage tracking
+        self.setup_cache()
+        self.load_or_init_usage()
 
-    def _update_usage_data(self):
-        """Get current rate limits without burning an API read"""
-        try:
-            response = self.oauth.get("https://api.twitter.com/2/usage/tweets")
-            response.raise_for_status()
+        # Get users ID for mentions endpoint (one-time setup)
+        self.user_id = self.get_user_id()
 
-            usage_data = response.json()['data']
+        # Initial read if cache is empty or stale
+        if not self.cache.exists() or self.cache_is_stale():
+            self.refresh_cache()
 
-            # Calculate remaining quota
-            project_cap = int(usage_data['project_cap'])
-            project_usage = int(usage_data['project_usage'])
-            remaining_reads = project_cap - project_usage
-
-            # Calculate days until reset
-            today = date.today().day
-            reset_day = int(usage_data['cap_reset_day'])
-            days_until_reset = reset_day - today if reset_day > today else (30 + reset_day - today)
-
-            limits = {
-                'reads': {
-                    'limit': project_cap,
-                    'remaining': remaining_reads,
-                    'reset_day': reset_day,
-                    'days_until_reset': days_until_reset
-                },
-                'project_id': usage_data['project_id']
-            }
-
-            # Store updated limits
-            self.memory.create(
-                category="twitter_meta",
-                content=str(limits),
-                metadata={
-                    "type": "usage_limits",
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
+    def setup_cache(self):
+        """Set up SQLite cache for tweets and replies"""
+        conn = sqlite3.connect(self.cache_db)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                timestamp TEXT
             )
-
-            return limits
-        
-        except Exception as e: 
-            logger.error(f"Error updating usage data: {e}")
-            return None
-        
-    def _track_api_call(self, response: requests.Response, call_type: str):
-        """Update rate limit tracking based on response headers"""
-        try:
-            limits = {
-                'limit': int(response.headers.get('x-rate-limit-limit', 0)),
-                'remaining': int(response.headers.get('x-rate-limit-remaining', 0)),
-                'reset': int(response.headers.get('x-rate-limit-reset', 0))
+        ''')
+        conn.commit()
+        conn.close
+    
+    def load_or_init_usage(self):
+        """Load or initiate API usage tracking with reset check"""
+        now = datetime.now()
+        if not os.path.exists(self.usage_log):
+            self.usage = {
+                "reads": 0,
+                "posts": 0,
+                "last_reset": now.isoformat(),
+                "history": []
             }
-            
-            current_limits = self.get_rate_limits()
-            if current_limits:
-                current_limits[call_type] = limits
-                
-                self.memory.create(
-                    category="twitter_meta",
-                    content=str(current_limits),
-                    metadata={
-                        "type": "rate_limits",
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
-                )
-        except Exception as e:
-            logger.error(f"Error tracking API call: {e}")
+            self.save_usage()
+        else:
+            with open(self.usage_log, 'r') as f:
+                self.usage = json.load(f)
+            # Check if limits should reset (baesd on last API reset time)
+            if self.reset_time and datetime.fromtimestamp(self.reset_time) < now:
+                self.usage["reads"] = 0
+                self.usage["posts"] = 0
+                self.usage["last_reset"] = now.isoformat()
+                self.save_usage()
+        
+    def save_usage(self):
+        """Save usage stats to file"""
+        with open(self.usage_log, 'w') as f:
+            json.dump(self.usage, f, indent=4)
 
-    def get_rate_limits(self) -> Optional[Dict]:
-        """Get current rate limits from memory"""
-        try:
-            results = self.memory.search("twitter_meta", "rate_limits")
-            if results:
-                return eval(results[0].memory.content)
-            return self._update_rate_limits()
-        except Exception as e:
-            logger.error(f"Error getting rate limits: {e}")
-            return None
+    def cache_exists(self):
+        """Check if cache has data"""
+        conn = sqlite3.connect(self.cache_db)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM cache WHERE key='last_refresh'")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    
+    def cache_is_stale(self):
+        """Check if cache is outdated based on refresh interval"""
+        conn = sqlite3.connect(self.cache_db)
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM cache WHERE key='last_refresh'")
+        result = cursor.fetchone()
+        conn.close()
 
-    def _cache_interaction(self, interaction: Dict, interaction_type: str):
-        """Store an interaction in memory"""
-        try: 
-            self.memory.create(
-                category="twitter_interactions",
-                content=str(interaction),
-                metadata={
-                    "tweet_id": interaction["id"],
-                    "type": interaction_type,
-                    "author": interaction.get("author_id"),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error caching interaction: {e}")
+        if not result:
+            return True
+        
+        last_refresh = datetime.fromisoformat(result[0])
+        now = datetime.now()
+        time_since_refresh = (now - last_refresh).total_seconds()
 
-    def _get_cached_interaction(self, tweet_id: str) -> Optional[Dict]:
-        """Retrieve a cached interaction"""
+        return time_since_refresh > self.refresh_interval
+    
+    def refresh_cache(self):
+        """Fetch fresh data from X and update cache"""
+        if self.reads_remaining is not None and self.reads_remaining <= 0:
+            print(f"{self.agent_name}: Read limit reached until {datetime.fromtimestamp(self.reset_time)}.")
+            return
 
+        url = f"https://api.twitter.com/2/users/{self.user_id}/mentions?max_results=100"
+        response = requests.get(url, auth=self.auth)
 
+        if response.status_code == 200:
+            self.update_limits_from_headers(response)
+            conn = sqlite3.connect(self.cache_db)
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO cache (key, value, timestamp) VALUES (?, ?, ?)",
+                          ("mentions", response.text, datetime.now().isoformat()))
+            cursor.execute("INSERT OR REPLACE INTO cache (key, value, timestamp) VALUES (?, ?, ?)",
+                          ("last_refresh", datetime.now().isoformat(), datetime.now().isoformat()))
+            conn.commit()
+            conn.close()
 
+            self.usage["reads"] += 1
+            self.usage["history"].append({"type": "read", "timestamp": datetime.now().isoformat()})
+            self.save_usage()
+            print(f"{self.agent_name}: Cache refreshed. Reads remaining: {self.reads_remaining}/{self.read_limit}")
+        else:
+            print(f"{self.agent_name}: Error refreshing cache - {response.status_code}: {response.text}")
         
