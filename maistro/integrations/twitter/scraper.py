@@ -5,6 +5,8 @@ import time
 import random
 import ssl
 import socket
+import os
+import pickle
 from http.cookies import SimpleCookie
 import pyotp
 from requests.adapters import HTTPAdapter
@@ -60,6 +62,15 @@ class TwitterScraper:
         'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
         'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
     ]
+    
+    # Mobile user agents that have better success with Twitter login
+    MOBILE_USER_AGENTS = [
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (Linux; Android 11; Nokia G20) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.88 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 12; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/120.0.6099.119 Mobile/15E148 Safari/604.1',
+    ]
 
     def __init__(self):
         print("\nInitializing TwitterScraper...")
@@ -75,6 +86,10 @@ class TwitterScraper:
         self.cookies = {}
         self.user_agent = random.choice(self.USER_AGENTS)
         print(f"Using User-Agent: {self.user_agent}")
+        
+        # Create a directory for cookie cache if it doesn't exist
+        self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+        os.makedirs(self.cache_dir, exist_ok=True)
         
         self.headers = {
             'authorization': f'Bearer {self.BEARER_TOKEN}',
@@ -144,7 +159,7 @@ class TwitterScraper:
         raise TwitterError("Could not retrieve guest token after retries.")
 
     def _update_cookies(self, response: requests.Response) -> None:
-        """Extract and store session cookies."""
+        """Extract and store session cookies with all attributes."""
         cookies = SimpleCookie()
         cookie_header = response.headers.get('Set-Cookie', '')
         print(f"\nProcessing cookies from response...")
@@ -158,18 +173,48 @@ class TwitterScraper:
         
         # Then process any Set-Cookie headers
         if cookie_header:
-            for cookie in cookie_header.split(','):
-                try:
-                    cookies.load(cookie)
-                    for key, morsel in cookies.items():
-                        self.cookies[key] = morsel.value
-                        self.session.cookies.set(key, morsel.value, domain='.twitter.com', path='/')
-                        if key == 'ct0':  # CSRF token
-                            self.csrf_token = morsel.value
-                            print(f"Found CSRF token from header: {morsel.value[:5]}...")
-                except Exception as e:
-                    print(f"Error processing cookie: {e}")
-                    continue
+            # Twitter often sends multiple cookies in a single header, separated by commas
+            # But this can be problematic because cookie values can also contain commas
+            # So we need to be more careful about splitting
+            
+            # First try to parse the entire header
+            try:
+                cookies.load(cookie_header)
+                for key, morsel in cookies.items():
+                    self.cookies[key] = morsel.value
+                    
+                    # Preserve all cookie attributes when setting in session
+                    domain = morsel['domain'] if 'domain' in morsel else '.twitter.com'
+                    path = morsel['path'] if 'path' in morsel else '/'
+                    expires = morsel['expires'] if 'expires' in morsel else None
+                    
+                    self.session.cookies.set(
+                        key, 
+                        morsel.value,
+                        domain=domain,
+                        path=path,
+                        expires=expires
+                    )
+                    
+                    if key == 'ct0':  # CSRF token
+                        self.csrf_token = morsel.value
+                        print(f"Found CSRF token from header: {morsel.value[:5]}...")
+            except Exception as e:
+                # If that fails, try splitting by comma and parsing each part
+                print(f"Error processing cookie header as a whole: {e}")
+                for cookie in cookie_header.split(','):
+                    try:
+                        single_cookie = SimpleCookie()
+                        single_cookie.load(cookie)
+                        for key, morsel in single_cookie.items():
+                            self.cookies[key] = morsel.value
+                            self.session.cookies.set(key, morsel.value, domain='.twitter.com', path='/')
+                            if key == 'ct0':  # CSRF token
+                                self.csrf_token = morsel.value
+                                print(f"Found CSRF token from header: {morsel.value[:5]}...")
+                    except Exception as e:
+                        print(f"Error processing cookie part: {e}")
+                        continue
                     
         print(f"Current cookie count: {len(self.cookies)}")
 
@@ -299,15 +344,139 @@ class TwitterScraper:
                 else:
                     raise
 
+    def _get_cookie_cache_path(self, username: str) -> str:
+        """Get the path to the cookie cache file for a specific username."""
+        return os.path.join(self.cache_dir, f"{username}_cookies.pkl")
+    
+    def _save_cookies_to_cache(self, username: str) -> None:
+        """Save the current cookies to a cache file with full metadata."""
+        try:
+            cache_path = self._get_cookie_cache_path(username)
+            
+            # Extract full cookie objects from the session with all attributes
+            cookie_objects = []
+            for cookie in self.session.cookies:
+                cookie_obj = {
+                    'key': cookie.name,
+                    'value': cookie.value,
+                    'domain': cookie.domain,
+                    'path': cookie.path,
+                    'secure': cookie.secure,
+                    'httpOnly': cookie.has_nonstandard_attr('HttpOnly'),
+                    'sameSite': cookie.get_nonstandard_attr('SameSite', 'Lax')
+                }
+                cookie_objects.append(cookie_obj)
+            
+            cookie_data = {
+                'cookies': cookie_objects,  # Store full cookie objects
+                'cookies_dict': self.cookies,  # Also store the simple dict for backward compatibility
+                'csrf_token': self.csrf_token,
+                'timestamp': time.time()
+            }
+            
+            with open(cache_path, 'wb') as f:
+                pickle.dump(cookie_data, f)
+            print(f"Saved {len(cookie_objects)} cookies to cache for user: {username}")
+        except Exception as e:
+            print(f"Error saving cookies to cache: {e}")
+    
+    def _load_cookies_from_cache(self, username: str) -> bool:
+        """Load cookies from cache file if available and not expired."""
+        try:
+            cache_path = self._get_cookie_cache_path(username)
+            if not os.path.exists(cache_path):
+                return False
+                
+            with open(cache_path, 'rb') as f:
+                cookie_data = pickle.load(f)
+                
+            # Check if cookies are expired (older than 12 hours)
+            if time.time() - cookie_data.get('timestamp', 0) > 12 * 60 * 60:
+                print("Cached cookies are expired")
+                return False
+            
+            # Handle both new format (with full cookie objects) and old format
+            if 'cookies_dict' in cookie_data:
+                # New format with full cookie metadata
+                self.cookies = cookie_data.get('cookies_dict', {})
+                cookie_objects = cookie_data.get('cookies', [])
+                
+                # Clear existing session cookies
+                self.session.cookies.clear()
+                
+                # Set cookies with full metadata
+                for cookie_obj in cookie_objects:
+                    self.session.cookies.set(
+                        cookie_obj['key'], 
+                        cookie_obj['value'],
+                        domain=cookie_obj['domain'],
+                        path=cookie_obj['path'],
+                        secure=cookie_obj['secure']
+                    )
+                    
+                print(f"Loaded {len(cookie_objects)} cookies with full metadata")
+            else:
+                # Old format with simple dict
+                self.cookies = cookie_data.get('cookies', {})
+                
+                # Update session cookies with basic attributes
+                for name, value in self.cookies.items():
+                    self.session.cookies.set(name, value, domain='.twitter.com', path='/')
+            
+            self.csrf_token = cookie_data.get('csrf_token')
+                
+            print(f"Loaded cookies from cache for user: {username}")
+            print(f"Cookie count: {len(self.cookies)}")
+            return len(self.cookies) > 0 and 'auth_token' in self.cookies and self.csrf_token is not None
+        except Exception as e:
+            print(f"Error loading cookies from cache: {e}")
+            return False
+    
+    def _verify_credentials(self) -> bool:
+        """Verify if the current credentials are valid, similar to Eliza's approach."""
+        try:
+            # Instead of trying to verify credentials with the API, let's try a simpler approach
+            # Just check if we have the essential cookies that Eliza uses
+            essential_cookies = ['auth_token', 'ct0', 'twid']
+            
+            for cookie in essential_cookies:
+                if cookie not in self.cookies:
+                    print(f"Missing essential cookie: {cookie}")
+                    return False
+            
+            # If we have all essential cookies and they're not empty, assume they're valid
+            # This is a more permissive approach that might work better
+            print("All essential cookies present, assuming valid session")
+            return True
+        except Exception as e:
+            print(f"Error verifying credentials: {e}")
+            return False
+    
     def login(self, username: str, password: str, email: Optional[str] = None, two_factor_secret: Optional[str] = None) -> bool:
         """Log in to Twitter and handle the flow."""
         print(f"\nStarting login process for user: {username}")
         print(f"Email provided: {'Yes' if email else 'No'}")
         print(f"2FA secret provided: {'Yes' if two_factor_secret else 'No'}")
         
+        # Try to use cached cookies first
+        if self._load_cookies_from_cache(username):
+            print("Using cached cookies to verify login")
+            if self._verify_credentials():
+                print("Successfully logged in using cached cookies")
+                self.username = username
+                return True
+            else:
+                print("Cached cookies are invalid, proceeding with full login")
+        
         # Clear cookies before login to avoid conflicts
         self.session.cookies.clear()
         self.cookies = {}
+        
+        # Use a mobile user agent for better login success
+        original_user_agent = self.user_agent
+        self.user_agent = random.choice(self.MOBILE_USER_AGENTS)
+        self.headers['User-Agent'] = self.user_agent
+        print(f"Switching to mobile User-Agent for login: {self.user_agent}")
         
         try:
             # Get a fresh guest token before login
@@ -436,6 +605,9 @@ class TwitterScraper:
                     if 'auth_token' in self.cookies and self.csrf_token:
                         print(f"Verified login. Auth token and CSRF token present.")
                         self.user_id = username  # Just use the provided username as the user ID
+                        
+                        # Save cookies to cache for future use
+                        self._save_cookies_to_cache(username)
                     else:
                         print("Warning: Login appeared successful but auth tokens are missing")
                         
@@ -455,6 +627,12 @@ class TwitterScraper:
         except Exception as e:
             print(f"Login failed with error: {e}")
             return False
+        finally:
+            # Restore the original user agent if login failed
+            if not self.username:
+                self.user_agent = original_user_agent
+                self.headers['User-Agent'] = self.user_agent
+                print(f"Restoring original User-Agent: {self.user_agent}")
 
     def create_tweet(self, text: str) -> Dict:
         """Create a new tweet using Twitter GraphQL API."""

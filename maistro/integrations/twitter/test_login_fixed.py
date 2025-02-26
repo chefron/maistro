@@ -32,6 +32,14 @@ load_dotenv(dotenv_path=env_path)
 
 def test_login(username, password, email=None, two_factor_secret=None):
     """Test login functionality of the scraper with improved anti-detection measures"""
+    print("\n=== Testing login functionality with improved timing ===")
+    
+    # Add a pre-login delay to appear more human-like
+    human_delay = random.uniform(4.0, 7.0)
+    print(f"Adding pre-login delay of {human_delay:.2f} seconds...")
+    time.sleep(human_delay)
+    
+    # Create a fresh scraper instance for login
     print("Initializing Twitter scraper...")
     scraper = TwitterScraper()
     
@@ -40,13 +48,7 @@ def test_login(username, password, email=None, two_factor_secret=None):
     scraper.min_delay = 2.0  # Increase minimum delay between requests
     scraper.max_delay = 5.0  # Increase maximum delay between requests
     
-    print("\n=== Testing login functionality with improved timing ===")
-    
-    # Add a pre-login delay to appear more human-like
-    human_delay = random.uniform(3.0, 6.0)
-    print(f"Adding pre-login delay of {human_delay:.2f} seconds...")
-    time.sleep(human_delay)
-    
+    # Try to login
     login_success = scraper.login(username, password, email, two_factor_secret)
     
     if login_success:
@@ -56,11 +58,11 @@ def test_login(username, password, email=None, two_factor_secret=None):
         print("\n=== Testing tweet creation ===")
         try:
             # Add a longer delay before attempting to tweet
-            tweet_delay = random.uniform(4.0, 7.0)
+            tweet_delay = random.uniform(9.0, 15.0)
             print(f"Adding pre-tweet delay of {tweet_delay:.2f} seconds...")
             time.sleep(tweet_delay)
             
-            tweet_text = "Test tweet from Maistro AI agent. This is an automated test."
+            tweet_text = "another test tweet wow ok fine"
             result = scraper.create_tweet(tweet_text)
             print(f"✅ Successfully created tweet: {result.get('data', {}).get('text', 'Unknown')}")
         except Exception as e:
