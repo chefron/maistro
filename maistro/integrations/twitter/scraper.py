@@ -8,6 +8,7 @@ import socket
 import os
 import pickle
 from http.cookies import SimpleCookie
+from datetime import datetime
 import pyotp
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
@@ -117,8 +118,8 @@ class TwitterScraper:
         self.username = None
         
         # Add some randomized delays between requests
-        self.min_delay = 1.0
-        self.max_delay = 3.0
+        self.min_delay = 2.0
+        self.max_delay = 5.0
 
     def _get_guest_token(self, retries=5) -> str:
         """Retrieve a guest token, retrying if necessary."""
@@ -173,11 +174,7 @@ class TwitterScraper:
         
         # Then process any Set-Cookie headers
         if cookie_header:
-            # Twitter often sends multiple cookies in a single header, separated by commas
-            # But this can be problematic because cookie values can also contain commas
-            # So we need to be more careful about splitting
-            
-            # First try to parse the entire header
+            # Try to parse the entire header
             try:
                 cookies.load(cookie_header)
                 for key, morsel in cookies.items():
@@ -186,7 +183,14 @@ class TwitterScraper:
                     # Preserve all cookie attributes when setting in session
                     domain = morsel['domain'] if 'domain' in morsel else '.twitter.com'
                     path = morsel['path'] if 'path' in morsel else '/'
-                    expires = morsel['expires'] if 'expires' in morsel else None
+                    # Manually parse the 'expires' attribute
+                    expires = None
+                    if 'expires' in morsel:
+                        try:
+                            expires_datetime = datetime.strptime(morsel['expires'], '%a, %d %b %Y %H:%M:%S GMT')
+                            expires = expires_datetime.timestamp()
+                        except ValueError as e:
+                            print(f"Error parsing expires date: {e}")
                     
                     self.session.cookies.set(
                         key, 
@@ -279,8 +283,7 @@ class TwitterScraper:
                 print(f"Backing off for {backoff_time:.2f} seconds...")
                 time.sleep(backoff_time)
         
-        # This should never be reached due to the exception handling above,
-        # but adding as a fallback to satisfy the linter
+        # This should never be reached due to the exception handling above, but adding as a fallback to satisfy the linter
         raise TwitterError("Request failed with an unknown error")
 
     def _execute_flow_task(self, data: Dict) -> Dict:
