@@ -25,10 +25,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from scraper import TwitterScraper
 
-# Load environment variables from .env file in project root
-project_root = Path(__file__).resolve().parents[3]  # Go up 3 levels from the script
-env_path = project_root / '.env'
-load_dotenv(dotenv_path=env_path)
+load_dotenv()
 
 def test_login(username, password, email=None, two_factor_secret=None):
     """Test login functionality of the scraper with improved anti-detection measures"""
@@ -58,11 +55,11 @@ def test_login(username, password, email=None, two_factor_secret=None):
         print("\n=== Testing tweet creation ===")
         try:
             # Add a longer delay before attempting to tweet
-            tweet_delay = random.uniform(9.0, 15.0)
+            tweet_delay = random.uniform(5.0, 11.0)
             print(f"Adding pre-tweet delay of {tweet_delay:.2f} seconds...")
             time.sleep(tweet_delay)
             
-            tweet_text = "another test tweet wow ok fine"
+            tweet_text = "let's kisner-smash some pins today"
             result = scraper.create_tweet(tweet_text)
             print(f"✅ Successfully created tweet: {result.get('data', {}).get('text', 'Unknown')}")
         except Exception as e:

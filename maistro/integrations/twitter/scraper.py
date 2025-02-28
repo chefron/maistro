@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Any, List, Tuple
+from typing import Dict, Optional, Any, List, Tuple, Callable, TypeVar, Generic
 import requests
 import json
 import time
@@ -7,11 +7,14 @@ import ssl
 import socket
 import os
 import pickle
+import threading
 from http.cookies import SimpleCookie
 from datetime import datetime
 import pyotp
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
+
+T = TypeVar('T')  # Type variable for return values
 
 class TLSCipherRandomizingAdapter(HTTPAdapter):
     """Custom HTTP adapter that randomizes TLS ciphers to avoid fingerprinting"""
@@ -121,6 +124,9 @@ class TwitterScraper:
         self.min_delay = 2.0
         self.max_delay = 5.0
 
+        # Create request queue for rate-limiting requests
+        self.request_queue = RequestQueue()
+
     def _get_guest_token(self, retries=5) -> str:
         """Retrieve a guest token, retrying if necessary."""
         for attempt in range(retries):
@@ -223,68 +229,52 @@ class TwitterScraper:
         print(f"Current cookie count: {len(self.cookies)}")
 
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
-        """Handle request execution with error handling."""
-        print(f"\nMaking {method} request to {url}")
+        """Handle request execution with error handling and queue management."""
+        print(f"\nQueuing {method} request to {url}")
         
-        # Add random delay to mimic human behavior
-        delay = random.uniform(self.min_delay, self.max_delay)
-        print(f"Adding delay of {delay:.2f} seconds...")
-        time.sleep(delay)
-        
-        # Prepare request headers
-        request_headers = self.headers.copy()
-        if self.csrf_token:
-            request_headers['x-csrf-token'] = self.csrf_token
-        
-        # Occasionally rotate user agent
-        if random.random() < 0.2:  # 20% chance to change user agent
-            new_user_agent = random.choice(self.USER_AGENTS)
-            if new_user_agent != request_headers['User-Agent']:
-                print(f"Rotating User-Agent to: {new_user_agent}")
-                request_headers['User-Agent'] = new_user_agent
-                self.user_agent = new_user_agent
-        
-        kwargs.setdefault('headers', request_headers)
-        kwargs.setdefault('cookies', self.cookies)
-        kwargs.setdefault('timeout', 15)  # Set a reasonable timeout
-        
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = self.session.request(method, url, **kwargs)
-                print(f"Response status code: {response.status_code}")
-                self._update_cookies(response)
+        # Define the actual request function
+        def execute_request():
+            print(f"Executing {method} request to {url}")
+            
+            # Prepare request headers
+            request_headers = self.headers.copy()
+            if self.csrf_token:
+                request_headers['x-csrf-token'] = self.csrf_token
+            
+            # Occasionally rotate user agent
+            if random.random() < 0.2:  # 20% chance to change user agent
+                new_user_agent = random.choice(self.USER_AGENTS)
+                if new_user_agent != request_headers['User-Agent']:
+                    print(f"Rotating User-Agent to: {new_user_agent}")
+                    request_headers['User-Agent'] = new_user_agent
+                    self.user_agent = new_user_agent
+            
+            kwargs.setdefault('headers', request_headers)
+            kwargs.setdefault('cookies', self.cookies)
+            kwargs.setdefault('timeout', 15)  # Set a reasonable timeout
+            
+            response = self.session.request(method, url, **kwargs)
+            print(f"Response status code: {response.status_code}")
+            self._update_cookies(response)
 
-                # Handle different status codes
-                if response.status_code == 403:  # Forbidden, likely means guest token expired
-                    print("403 Forbidden - Refreshing guest token...")
-                    self.guest_token = self._get_guest_token()
-                    self.headers['x-guest-token'] = self.guest_token
-                    request_headers['x-guest-token'] = self.guest_token
-                    kwargs['headers'] = request_headers
-                    continue
-                    
-                elif response.status_code == 429:  # Rate limited
-                    retry_after = int(response.headers.get('retry-after', 60))
-                    print(f"Rate limited. Waiting for {retry_after} seconds...")
-                    time.sleep(retry_after)
-                    continue
-                    
-                response.raise_for_status()
-                return response
+            # Handle different status codes
+            if response.status_code == 403:  # Forbidden, likely means guest token expired
+                print("403 Forbidden - Refreshing guest token...")
+                self.guest_token = self._get_guest_token()
+                self.headers['x-guest-token'] = self.guest_token
+                raise Exception("Guest token expired, please retry request")
                 
-            except requests.RequestException as e:
-                print(f"Request error (attempt {attempt+1}/{max_retries}): {e}")
-                if attempt == max_retries - 1:
-                    raise TwitterError(f"Request failed after {max_retries} attempts: {e}")
+            elif response.status_code == 429:  # Rate limited
+                retry_after = int(response.headers.get('retry-after', 60))
+                print(f"Rate limited. Waiting for {retry_after} seconds...")
+                time.sleep(retry_after)
+                raise Exception(f"Rate limited, retry after {retry_after} seconds")
                 
-                # Add exponential backoff with jitter
-                backoff_time = (2 ** attempt) * random.uniform(1.0, 2.0)
-                print(f"Backing off for {backoff_time:.2f} seconds...")
-                time.sleep(backoff_time)
+            response.raise_for_status()
+            return response
         
-        # This should never be reached due to the exception handling above, but adding as a fallback to satisfy the linter
-        raise TwitterError("Request failed with an unknown error")
+        # Use the request queue to manage this request
+        return self.request_queue.add(execute_request)
 
     def _execute_flow_task(self, data: Dict) -> Dict:
         """Executes login flow steps."""
@@ -436,7 +426,7 @@ class TwitterScraper:
             return False
     
     def _verify_credentials(self) -> bool:
-        """Verify if the current credentials are valid, similar to Eliza's approach."""
+        """Verify if the current credentials are valid"""
         try:
             # Instead of trying to verify credentials with the API, let's try a simpler approach
             # Just check if we have the essential cookies that Eliza uses
@@ -642,8 +632,17 @@ class TwitterScraper:
         if not self.csrf_token:
             raise TwitterError("Not authenticated. Please login first.")
         
+        # First, simulate browsing behavior by fetching timeline
+        try:
+            print("Simulating browsing behavior before tweeting...")
+            timeline_url = "https://twitter.com/i/api/2/timeline/home.json?count=20"
+            self._make_request('GET', timeline_url)
+        except Exception as e:
+            # Just log and continue if this fails, it's just to mimic natural behavior
+            print(f"Timeline fetch failed (continuing anyway): {e}")
+        
         # Add a small random delay before posting (simulates typing/thinking)
-        thinking_time = random.uniform(2.0, 5.0)
+        thinking_time = random.uniform(5.0, 15.0)
         print(f"Adding pre-tweet delay of {thinking_time:.2f} seconds...")
         time.sleep(thinking_time)
         
@@ -672,8 +671,15 @@ class TwitterScraper:
             'referer': 'https://twitter.com/home',
             'origin': 'https://twitter.com',
             'x-twitter-active-user': 'yes',
-            # Adding a unique transaction ID helps appear more like a real browser
-            'x-client-transaction-id': f"{random.randint(100000, 999999)}_{int(time.time() * 1000)}"
+            # More realistic transaction ID format
+            'x-client-transaction-id': f"01{''.join(random.choices('0123456789abcdef', k=16))}",
+            # Add more browser-like headers
+            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': random.choice(['"Windows"', '"macOS"', '"Linux"']),
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site',
         })
         
         # Add auth token from cookies if available
@@ -733,9 +739,19 @@ class TwitterScraper:
             result = response.json()
             
             print(f"Tweet creation response: {json.dumps(result, indent=2)}")
+
+            # Add more realistic post-tweet behavior
+            post_tweet_delay = random.uniform(2.0, 5.0)
+            print(f"Adding post-tweet delay of {post_tweet_delay:.2f} seconds...")
+            time.sleep(post_tweet_delay)
             
-            # Add a small delay after tweeting
-            time.sleep(random.uniform(1.0, 3.0))
+            try:
+                # Use a more reliable endpoint for profile checking
+                profile_url = f"https://twitter.com/i/api/graphql/sLVLhk0bGj3MVFEKTdax1w/UserByScreenName?variables=%7B%22screen_name%22%3A%22{self.username.lower()}%22%2C%22withSafetyModeUserFields%22%3Atrue%7D"
+                self._make_request('GET', profile_url)
+            except Exception as e:
+                # Just log this, don't raise, as it's optional behavior
+                print(f"Profile check after tweet failed (ignoring): {e}")
             
             return result
         except Exception as e:
@@ -745,3 +761,128 @@ class TwitterScraper:
 class TwitterError(Exception):
     """Exception for Twitter-related errors."""
     pass
+
+class RequestQueue:
+    """
+    Queue for managing Twitter API requests with natural delays and rate limiting
+    to mimic human behavior and avoid detection.
+    """
+    
+    def __init__(self):
+        self.queue = []
+        self.processing = False
+        self.lock = threading.Lock()
+        # Configurable delay ranges (in seconds)
+        self.min_delay = 1.5
+        self.max_delay = 3.5
+        # For tracking consecutive errors
+        self.consecutive_errors = 0
+        self.max_retries = 3
+    
+    def add(self, request_func: Callable[[], T]) -> T:
+        """
+        Add a request function to the queue and process it when ready.
+        
+        Args:
+            request_func: A callable function that performs the API request
+            
+        Returns:
+            The result of the request function
+        """
+        result = None
+        error = None
+        completed = threading.Event()
+        
+        def execute_request():
+            nonlocal result, error
+            try:
+                result = request_func()
+            except Exception as e:
+                error = e
+            finally:
+                completed.set()
+        
+        # Add to queue
+        with self.lock:
+            self.queue.append(execute_request)
+            # Start processing if not already running
+            if not self.processing:
+                threading.Thread(target=self._process_queue).start()
+        
+        # Wait for completion
+        completed.wait()
+        
+        if error:
+            raise error
+        return result
+    
+    def _process_queue(self):
+        """Process queued requests with natural delays between them."""
+        with self.lock:
+            if self.processing:
+                return
+            self.processing = True
+        
+        try:
+            while True:
+                # Get next request
+                with self.lock:
+                    if not self.queue:
+                        self.processing = False
+                        break
+                    request = self.queue.pop(0)
+                
+                # Execute with retry logic
+                self._execute_with_retry(request)
+                
+                # Add natural delay between requests
+                self._add_natural_delay()
+                
+        except Exception as e:
+            print(f"Error in request queue processing: {e}")
+            with self.lock:
+                self.processing = False
+    
+    def _execute_with_retry(self, request_func):
+        """Execute a request with retry logic for transient errors."""
+        retry_count = 0
+        while retry_count <= self.max_retries:
+            try:
+                request_func()
+                # Reset error counter on success
+                self.consecutive_errors = 0
+                return
+            except Exception as e:
+                retry_count += 1
+                self.consecutive_errors += 1
+                
+                if retry_count <= self.max_retries:
+                    # Exponential backoff with jitter
+                    backoff_time = (2 ** retry_count) * random.uniform(0.8, 1.2)
+                    print(f"Request failed, retrying in {backoff_time:.2f} seconds... ({e})")
+                    time.sleep(backoff_time)
+                else:
+                    print(f"Request failed after {self.max_retries} retries: {e}")
+                    raise
+    
+    def _add_natural_delay(self):
+        """Add a natural, human-like delay between requests."""
+        # Base delay
+        base_delay = random.uniform(self.min_delay, self.max_delay)
+        
+        # Add extra delay if we've had errors (to avoid aggressive retries)
+        error_factor = min(self.consecutive_errors * 0.5, 5.0)  # Cap at 5 seconds extra
+        
+        # Add occasional longer pauses (10% chance of "thinking")
+        if random.random() < 0.1:
+            thinking_pause = random.uniform(2.0, 8.0)
+        else:
+            thinking_pause = 0
+        
+        total_delay = base_delay + error_factor + thinking_pause
+        
+        # Log only if delay is significant
+        if total_delay > self.min_delay * 1.5:
+            print(f"Adding delay of {total_delay:.2f} seconds between requests...")
+        
+        time.sleep(total_delay)
