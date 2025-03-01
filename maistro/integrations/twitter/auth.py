@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Any, List, Tuple, Callable, TypeVar, Generic
+from typing import Dict, Optional, Any, List, Tuple
 import requests
 import json
 import time
@@ -7,14 +7,13 @@ import ssl
 import socket
 import os
 import pickle
-import threading
 from http.cookies import SimpleCookie
 from datetime import datetime
 import pyotp
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 
-T = TypeVar('T')  # Type variable for return values
+from utils import RequestQueue, TwitterError
 
 class TLSCipherRandomizingAdapter(HTTPAdapter):
     """Custom HTTP adapter that randomizes TLS ciphers to avoid fingerprinting"""
@@ -49,8 +48,8 @@ class TLSCipherRandomizingAdapter(HTTPAdapter):
         new_ciphers = ':'.join(top_ciphers + remaining_ciphers)
         ssl._DEFAULT_CIPHERS = new_ciphers
 
-class TwitterScraper:
-    """Enhanced Twitter scraper with improved session handling and login flow"""
+class TwitterAuth:
+    """Enhanced Twitter login with improved session handling and flow"""
 
     BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     LOGIN_URL = "https://api.twitter.com/1.1/onboarding/task.json"
@@ -77,7 +76,7 @@ class TwitterScraper:
     ]
 
     def __init__(self):
-        print("\nInitializing TwitterScraper...")
+        print("\nInitializing TwitterAuth...")
         self.session = requests.Session()
         
         # Install the TLS cipher randomizing adapter and disable SSL verification for testing
@@ -228,7 +227,7 @@ class TwitterScraper:
                     
         print(f"Current cookie count: {len(self.cookies)}")
 
-    def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
+    def make_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """Handle request execution with error handling and queue management."""
         print(f"\nQueuing {method} request to {url}")
         
@@ -292,7 +291,7 @@ class TwitterScraper:
         else:
             print(f"Flow task data: {json.dumps(data, indent=2)}")
             
-        response = self._make_request('POST', self.LOGIN_URL, json=data)
+        response = self.make_request('POST', self.LOGIN_URL, json=data)
         result = response.json()
         
         # Log the response but redact sensitive information
@@ -627,254 +626,32 @@ class TwitterScraper:
                 self.headers['User-Agent'] = self.user_agent
                 print(f"Restoring original User-Agent: {self.user_agent}")
 
-    def create_tweet(self, text: str) -> Dict:
-        """Create a new tweet using Twitter GraphQL API."""
-        if not self.csrf_token:
-            raise TwitterError("Not authenticated. Please login first.")
+    def login_with_retry(self, username, password, email=None, two_factor_secret=None, max_attempts=2, retry_delay=7.0):
+        """Login with automatic retry on failure"""
         
-        # First, simulate browsing behavior by fetching timeline
+        # Try an initial warmup request to establish some cookies
         try:
-            print("Simulating browsing behavior before tweeting...")
-            timeline_url = "https://twitter.com/i/api/2/timeline/home.json?count=20"
-            self._make_request('GET', timeline_url)
+            print("Performing warm-up request...")
+            self.make_request('GET', 'https://twitter.com/')
         except Exception as e:
-            # Just log and continue if this fails, it's just to mimic natural behavior
-            print(f"Timeline fetch failed (continuing anyway): {e}")
+            print(f"Warm-up request failed (continuing anyway): {e}")
         
-        # Add a small random delay before posting (simulates typing/thinking)
-        thinking_time = random.uniform(5.0, 15.0)
-        print(f"Adding pre-tweet delay of {thinking_time:.2f} seconds...")
-        time.sleep(thinking_time)
-        
-        print(f"\nAttempting to create tweet: {text}")
-        url = "https://twitter.com/i/api/graphql/a1p9RWpkYKBjWv_I3WzS-A/CreateTweet"
-        
-        # Build a tweet request payload for GraphQL API
-        variables = {
-            "tweet_text": text,
-            "dark_request": False,
-            "media": {
-                "media_entities": [],
-                "possibly_sensitive": False,
-            },
-            "semantic_annotation_ids": []
-        }
-        
-        # Set up tweet-specific headers
-        tweet_headers = self.headers.copy()
-        tweet_headers.update({
-            'content-type': 'application/json',
-            'x-twitter-auth-type': 'OAuth2Client',
-            'x-csrf-token': self.csrf_token,
-            'authorization': f'Bearer {self.BEARER_TOKEN}',
-            'x-twitter-client-language': 'en',
-            'referer': 'https://twitter.com/home',
-            'origin': 'https://twitter.com',
-            'x-twitter-active-user': 'yes',
-            # More realistic transaction ID format
-            'x-client-transaction-id': f"01{''.join(random.choices('0123456789abcdef', k=16))}",
-            # Add more browser-like headers
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': random.choice(['"Windows"', '"macOS"', '"Linux"']),
-            'sec-fetch-dest': 'empty',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-site': 'same-site',
-        })
-        
-        # Add auth token from cookies if available
-        if 'auth_token' in self.cookies:
-            auth_token = self.cookies['auth_token']
-            tweet_headers['cookie'] = f'auth_token={auth_token}; ct0={self.csrf_token}'
-        
-        # Features object required by the GraphQL API
-        features = {
-            "interactive_text_enabled": True,
-            "longform_notetweets_inline_media_enabled": False,
-            "responsive_web_text_conversations_enabled": False,
-            "tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": False,
-            "vibe_api_enabled": False,
-            "rweb_lists_timeline_redesign_enabled": True,
-            "responsive_web_graphql_exclude_directive_enabled": True,
-            "verified_phone_label_enabled": False,
-            "creator_subscriptions_tweet_preview_api_enabled": True,
-            "responsive_web_graphql_timeline_navigation_enabled": True,
-            "responsive_web_graphql_skip_user_profile_image_extensions_enabled": False,
-            "tweetypie_unmention_optimization_enabled": True,
-            "responsive_web_edit_tweet_api_enabled": True,
-            "graphql_is_translatable_rweb_tweet_is_translatable_enabled": True,
-            "view_counts_everywhere_api_enabled": True,
-            "longform_notetweets_consumption_enabled": True,
-            "tweet_awards_web_tipping_enabled": False,
-            "freedom_of_speech_not_reach_fetch_enabled": True,
-            "standardized_nudges_misinfo": True,
-            "longform_notetweets_rich_text_read_enabled": True,
-            "responsive_web_enhance_cards_enabled": False,
-            "subscriptions_verification_info_enabled": True,
-            "subscriptions_verification_info_reason_enabled": True,
-            "subscriptions_verification_info_verified_since_enabled": True,
-            "super_follow_badge_privacy_enabled": False,
-            "super_follow_exclusive_tweet_notifications_enabled": False,
-            "super_follow_tweet_api_enabled": False,
-            "super_follow_user_api_enabled": False,
-            "android_graphql_skip_api_media_color_palette": False,
-            "creator_subscriptions_subscription_count_enabled": False,
-            "blue_business_profile_image_shape_enabled": False,
-            "unified_cards_ad_metadata_container_dynamic_card_content_query_enabled": False,
-            "rweb_video_timestamps_enabled": False,
-            "c9s_tweet_anatomy_moderator_badge_enabled": False,
-            "responsive_web_twitter_article_tweet_consumption_enabled": False
-        }
-        
-        # Complete payload
-        payload = {
-            "variables": variables,
-            "features": features,
-            "fieldToggles": {}
-        }
-        
-        try:
-            print("Sending tweet request to GraphQL API endpoint...")
-            response = self._make_request('POST', url, json=payload, headers=tweet_headers)
-            result = response.json()
+        # Try login multiple times
+        for attempt in range(1, max_attempts + 1):
+            print(f"\nLogin attempt {attempt}/{max_attempts}...")
             
-            print(f"Tweet creation response: {json.dumps(result, indent=2)}")
-
-            # Add more realistic post-tweet behavior
-            post_tweet_delay = random.uniform(2.0, 5.0)
-            print(f"Adding post-tweet delay of {post_tweet_delay:.2f} seconds...")
-            time.sleep(post_tweet_delay)
+            success = self.login(username, password, email, two_factor_secret)
             
-            return result
-        except Exception as e:
-            print(f"Failed to create tweet: {e}")
-            raise TwitterError(f"Failed to create tweet: {e}")
-
-class TwitterError(Exception):
-    """Exception for Twitter-related errors."""
-    pass
-
-class RequestQueue:
-    """
-    Queue for managing Twitter API requests with natural delays and rate limiting
-    to mimic human behavior and avoid detection.
-    """
-    
-    def __init__(self):
-        self.queue = []
-        self.processing = False
-        self.lock = threading.Lock()
-        # Configurable delay ranges (in seconds)
-        self.min_delay = 1.5
-        self.max_delay = 3.5
-        # For tracking consecutive errors
-        self.consecutive_errors = 0
-        self.max_retries = 3
-    
-    def add(self, request_func: Callable[[], T]) -> T:
-        """
-        Add a request function to the queue and process it when ready.
-        
-        Args:
-            request_func: A callable function that performs the API request
-            
-        Returns:
-            The result of the request function
-        """
-        result = None
-        error = None
-        completed = threading.Event()
-        
-        def execute_request():
-            nonlocal result, error
-            try:
-                result = request_func()
-            except Exception as e:
-                error = e
-            finally:
-                completed.set()
-        
-        # Add to queue
-        with self.lock:
-            self.queue.append(execute_request)
-            # Start processing if not already running
-            if not self.processing:
-                threading.Thread(target=self._process_queue).start()
-        
-        # Wait for completion
-        completed.wait()
-        
-        if error:
-            raise error
-        return result
-    
-    def _process_queue(self):
-        """Process queued requests with natural delays between them."""
-        with self.lock:
-            if self.processing:
-                return
-            self.processing = True
-        
-        try:
-            while True:
-                # Get next request
-                with self.lock:
-                    if not self.queue:
-                        self.processing = False
-                        break
-                    request = self.queue.pop(0)
+            if success:
+                print(f"Login successful on attempt {attempt}")
+                return True
                 
-                # Execute with retry logic
-                self._execute_with_retry(request)
+            if attempt < max_attempts:
+                # Add a human-like delay between attempts
+                delay = retry_delay * (1 + random.random() * 0.5)  # Add some randomness
+                print(f"Login attempt {attempt} failed. Waiting {delay:.2f} seconds before retry...")
+                time.sleep(delay)
                 
-                # Add natural delay between requests
-                self._add_natural_delay()
+                # Important: Don't clear cookies or reset session between attempts
                 
-        except Exception as e:
-            print(f"Error in request queue processing: {e}")
-            with self.lock:
-                self.processing = False
-    
-    def _execute_with_retry(self, request_func):
-        """Execute a request with retry logic for transient errors."""
-        retry_count = 0
-        while retry_count <= self.max_retries:
-            try:
-                request_func()
-                # Reset error counter on success
-                self.consecutive_errors = 0
-                return
-            except Exception as e:
-                retry_count += 1
-                self.consecutive_errors += 1
-                
-                if retry_count <= self.max_retries:
-                    # Exponential backoff with jitter
-                    backoff_time = (2 ** retry_count) * random.uniform(0.8, 1.2)
-                    print(f"Request failed, retrying in {backoff_time:.2f} seconds... ({e})")
-                    time.sleep(backoff_time)
-                else:
-                    print(f"Request failed after {self.max_retries} retries: {e}")
-                    raise
-    
-    def _add_natural_delay(self):
-        """Add a natural, human-like delay between requests."""
-        # Base delay
-        base_delay = random.uniform(self.min_delay, self.max_delay)
-        
-        # Add extra delay if we've had errors (to avoid aggressive retries)
-        error_factor = min(self.consecutive_errors * 0.5, 5.0)  # Cap at 5 seconds extra
-        
-        # Add occasional longer pauses (10% chance of "thinking")
-        if random.random() < 0.1:
-            thinking_pause = random.uniform(2.0, 8.0)
-        else:
-            thinking_pause = 0
-        
-        total_delay = base_delay + error_factor + thinking_pause
-        
-        # Log only if delay is significant
-        if total_delay > self.min_delay * 1.5:
-            print(f"Adding delay of {total_delay:.2f} seconds between requests...")
-        
-        time.sleep(total_delay)
+        return False

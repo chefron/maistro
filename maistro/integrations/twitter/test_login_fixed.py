@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Fixed test script for the TwitterScraper login functionality.
-This script attempts to log in to Twitter with improved anti-detection measures.
+Test script for the Twitter client login and posting functionality.
+This script attempts to log in to Twitter with improved anti-detection measures and post a tweet.
 
 Usage:
-    python test_login_fixed.py [--2fa SECRET]
+    python test_login.py [--2fa SECRET]
 
 Options:
     --2fa SECRET: Two-factor authentication secret (optional)
@@ -23,12 +23,16 @@ import random
 import argparse
 from pathlib import Path
 from dotenv import load_dotenv
-from scraper import TwitterScraper
+
+# Import from our new modular structure
+from auth import TwitterAuth
+from post import TwitterPost
+from utils import TwitterError
 
 load_dotenv()
 
-def test_login(username, password, email=None, two_factor_secret=None):
-    """Test login functionality of the scraper with improved anti-detection measures"""
+def test_login_and_post(username, password, email=None, two_factor_secret=None):
+    """Test login and posting functionality with improved anti-detection measures"""
     print("\n=== Testing login functionality with improved timing ===")
     
     # Add a pre-login delay to appear more human-like
@@ -36,43 +40,48 @@ def test_login(username, password, email=None, two_factor_secret=None):
     print(f"Adding pre-login delay of {human_delay:.2f} seconds...")
     time.sleep(human_delay)
     
-    # Create a fresh scraper instance for login
-    print("Initializing Twitter scraper...")
-    scraper = TwitterScraper()
+    # Create auth instance for login
+    print("Initializing Twitter auth...")
+    auth = TwitterAuth()
     
     # Modify timing parameters to avoid triggering Twitter's anti-bot detection
-    # These values were found to work in the diagnostic script
-    scraper.min_delay = 2.0  # Increase minimum delay between requests
-    scraper.max_delay = 5.0  # Increase maximum delay between requests
+    auth.min_delay = 2.0  # Increase minimum delay between requests
+    auth.max_delay = 5.0  # Increase maximum delay between requests
     
     # Try to login
-    login_success = scraper.login(username, password, email, two_factor_secret)
+    login_success = auth.login_with_retry(username, password, email, two_factor_secret)
     
     if login_success:
         print("✅ Successfully logged in to Twitter")
         
-        # Test creating a tweet (commented out to avoid actually posting)
+        # Test creating a tweet
         print("\n=== Testing tweet creation ===")
         try:
+            # Create the poster instance with authenticated auth object
+            poster = TwitterPost(auth)
+            
             # Add a longer delay before attempting to tweet
             tweet_delay = random.uniform(5.0, 11.0)
             print(f"Adding pre-tweet delay of {tweet_delay:.2f} seconds...")
             time.sleep(tweet_delay)
             
-            tweet_text = "let's kisner-smash some pins today"
-            result = scraper.create_tweet(tweet_text)
+            # Test tweet content
+            tweet_text = "Just testing my Twitter client - " + time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Post the tweet
+            result = poster.create_tweet(tweet_text)
             print(f"✅ Successfully created tweet: {result.get('data', {}).get('text', 'Unknown')}")
+            
+            return True
         except Exception as e:
             print(f"❌ Error creating tweet: {e}")
             return False
-            
-        return True
     else:
         print("❌ Failed to log in to Twitter")
         return False
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Test Twitter login functionality')
+    parser = argparse.ArgumentParser(description='Test Twitter login and posting functionality')
     parser.add_argument('--2fa', dest='two_factor_secret', help='Two-factor authentication secret')
     args = parser.parse_args()
     
@@ -86,21 +95,21 @@ if __name__ == "__main__":
         print("Error: TWITTER_USERNAME and TWITTER_PASSWORD must be set in the .env file")
         sys.exit(1)
     
-    print("=== Twitter Login Test (Fixed Version) ===")
+    print("=== Twitter Login and Post Test ===")
     print(f"Username: {username}")
     print(f"Email provided: {'Yes' if email else 'No'}")
     print(f"2FA secret provided: {'Yes' if two_factor_secret else 'No'}")
     
-    success = test_login(username, password, email, two_factor_secret)
+    success = test_login_and_post(username, password, email, two_factor_secret)
     
     if success:
-        print("\n✅ All tests passed! The login functionality is working correctly.")
+        print("\n✅ All tests passed! The login and posting functionality are working correctly.")
         sys.exit(0)
     else:
-        print("\n❌ Tests failed. The login functionality is still having issues.")
+        print("\n❌ Tests failed. There are issues with login or posting.")
         print("\nTroubleshooting tips:")
         print("1. Check if the account is locked by trying to log in manually")
         print("2. Look for any verification emails from Twitter")
-        print("3. Try running the diagnose_login.py script for more detailed diagnostics")
-        print("4. Consider waiting 24 hours before trying again if Twitter has flagged the IP")
+        print("3. Consider waiting 24 hours before trying again if Twitter has flagged the IP")
+        print("4. Check if the account has any posting restrictions")
         sys.exit(1)
