@@ -7,6 +7,7 @@ import ssl
 import socket
 import os
 import pickle
+import uuid
 from http.cookies import SimpleCookie
 from datetime import datetime
 import pyotp
@@ -51,7 +52,7 @@ class TLSCipherRandomizingAdapter(HTTPAdapter):
 class TwitterAuth:
     """Enhanced Twitter login with improved session handling and flow"""
 
-    BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs=1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+    BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
     LOGIN_URL = "https://api.twitter.com/1.1/onboarding/task.json"
     GUEST_TOKEN_URL = "https://api.twitter.com/1.1/guest/activate.json"
     
@@ -87,8 +88,14 @@ class TwitterAuth:
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         self.cookies = {}
-        self.user_agent = random.choice(self.USER_AGENTS)
+
+        self.user_agent = random.choice(self.MOBILE_USER_AGENTS)
         print(f"Using User-Agent: {self.user_agent}")
+
+        # Create client UUID that stays consistent across requests
+        import uuid
+        self.client_uuid = str(uuid.uuid4())
+        print(f"Generated client UUID: {self.client_uuid}")
         
         # Create a directory for cookie cache if it doesn't exist
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
@@ -111,7 +118,9 @@ class TwitterAuth:
             'sec-fetch-dest': 'empty',
             'sec-fetch-mode': 'cors',
             'sec-fetch-site': 'same-site',
+            'x-client-uuid': self.client_uuid,
         }
+
         self.csrf_token = None
         print("Getting guest token...")
         self.guest_token = self._get_guest_token()
@@ -139,9 +148,17 @@ class TwitterAuth:
                 time.sleep(backoff_time)
             
             try:
+
+                guest_token_headers = {
+                    'authorization': f'Bearer {self.BEARER_TOKEN}',
+                    'User-Agent': self.user_agent,
+                    'content-type': 'application/json',
+                    'Accept': '*/*',
+                }
+
                 response = self.session.post(
                     self.GUEST_TOKEN_URL, 
-                    headers=self.headers,
+                    headers=guest_token_headers,
                     timeout=10
                 )
                 
@@ -239,14 +256,14 @@ class TwitterAuth:
             request_headers = self.headers.copy()
             if self.csrf_token:
                 request_headers['x-csrf-token'] = self.csrf_token
-            
-            # Occasionally rotate user agent
-            if random.random() < 0.2:  # 20% chance to change user agent
-                new_user_agent = random.choice(self.USER_AGENTS)
-                if new_user_agent != request_headers['User-Agent']:
-                    print(f"Rotating User-Agent to: {new_user_agent}")
-                    request_headers['User-Agent'] = new_user_agent
-                    self.user_agent = new_user_agent
+
+            # Update x-client-transaction-id for each request
+            import base64
+            import os
+            transaction_id_bytes = os.urandom(48)
+            transaction_id = base64.b64encode(transaction_id_bytes).decode('utf-8')
+            transaction_id = transaction_id.replace('+', '').replace('/', '')[:72]
+            request_headers['x-client-transaction-id'] = transaction_id
             
             kwargs.setdefault('headers', request_headers)
             kwargs.setdefault('cookies', self.cookies)
@@ -427,8 +444,7 @@ class TwitterAuth:
     def _verify_credentials(self) -> bool:
         """Verify if the current credentials are valid"""
         try:
-            # Instead of trying to verify credentials with the API, let's try a simpler approach
-            # Just check if we have the essential cookies that Eliza uses
+            # Check if we have the essential cookies
             essential_cookies = ['auth_token', 'ct0', 'twid']
             
             for cookie in essential_cookies:
@@ -437,7 +453,6 @@ class TwitterAuth:
                     return False
             
             # If we have all essential cookies and they're not empty, assume they're valid
-            # This is a more permissive approach that might work better
             print("All essential cookies present, assuming valid session")
             return True
         except Exception as e:
@@ -464,11 +479,10 @@ class TwitterAuth:
         self.session.cookies.clear()
         self.cookies = {}
         
-        # Use a mobile user agent for better login success
-        original_user_agent = self.user_agent
+        # Always use a mobile user agent for login
         self.user_agent = random.choice(self.MOBILE_USER_AGENTS)
         self.headers['User-Agent'] = self.user_agent
-        print(f"Switching to mobile User-Agent for login: {self.user_agent}")
+        print(f"Using mobile User-Agent for login: {self.user_agent}")
         
         try:
             # Get a fresh guest token before login
@@ -619,15 +633,14 @@ class TwitterAuth:
         except Exception as e:
             print(f"Login failed with error: {e}")
             return False
-        finally:
-            # Restore the original user agent if login failed
-            if not self.username:
-                self.user_agent = original_user_agent
-                self.headers['User-Agent'] = self.user_agent
-                print(f"Restoring original User-Agent: {self.user_agent}")
 
     def login_with_retry(self, username, password, email=None, two_factor_secret=None, max_attempts=2, retry_delay=7.0):
         """Login with automatic retry on failure"""
+
+        # Add a pre-login delay to appear more human-like
+        human_delay = random.uniform(4.0, 7.0)
+        print(f"Adding pre-login delay of {human_delay:.2f} seconds...")
+        time.sleep(human_delay)
         
         # Try an initial warmup request to establish some cookies
         try:

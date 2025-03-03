@@ -20,8 +20,8 @@ class RequestQueue:
         self.processing = False
         self.lock = threading.Lock()
         # Configurable delay ranges (in seconds)
-        self.min_delay = 1.5
-        self.max_delay = 3.5
+        self.min_delay = 4.5
+        self.max_delay = 9.5
         # For tracking consecutive errors
         self.consecutive_errors = 0
         self.max_retries = 3
