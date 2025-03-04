@@ -23,12 +23,13 @@ class TwitterPost:
         if not self.auth.csrf_token or not self.auth.username:
             raise TwitterError("Not authenticated. Please login first.")
     
-    def create_tweet(self, text: str) -> Dict:
+    def create_tweet(self, text: str, reply_to_id: Optional[str] = None) -> Dict:
         """
         Create a new tweet using Twitter GraphQL API.
         
         Args:
             text: The text content of the tweet
+            reply_to_id: Optional ID of a tweet to reply to
                 
         Returns:
             Dict: Response from Twitter API
@@ -38,41 +39,25 @@ class TwitterPost:
         
         # Simulate more realistic browsing before tweeting
         try:
-            print("Simulating browsing behavior before tweeting...")
+            print("Simulating natural browsing behavior...")
             
-            # First get the home timeline
-            print("Visiting home timeline...")
-            self.auth.make_request('GET', "https://twitter.com/home")
+            # Simulate reading timeline
+            browsing_time = random.uniform(5.0, 12.0)
+            print(f"Reading timeline for {browsing_time:.2f} seconds...")
+            time.sleep(browsing_time)
             
-            # Initial timeline reading pause
-            initial_reading = random.uniform(6.0, 13.0)
-            print(f"Reading initial tweets for {initial_reading:.2f} seconds...")
-            time.sleep(initial_reading)
+            # Simulate scrolling and reading more
+            scroll_time = random.uniform(3.0, 8.0)
+            print(f"Scrolling and reading more for {scroll_time:.2f} seconds...")
+            time.sleep(scroll_time)
             
-            # Simulate scrolling down by requesting more tweets with a cursor
-            # This mimics the "load more" functionality when scrolling
-            print("Scrolling down timeline...")
-            scroll_requests = random.randint(1, 3)  # Random number of scrolls
-            
-            for i in range(scroll_requests):
-                # In a real scenario, we would use the cursor from previous response
-                # Since we're just simulating, we can use a timestamp-based approach
-                cursor = str(int(time.time() * 1000))
-                timeline_url = f"https://twitter.com/i/api/2/timeline/home.json?count=20&cursor={cursor}"
-                self.auth.make_request('GET', timeline_url)
-                
-                # Pause between scrolls
-                scroll_pause = random.uniform(1.5, 4.0)
-                print(f"Reading more tweets for {scroll_pause:.2f} seconds...")
-                time.sleep(scroll_pause)
-            
-            # Then visit the compose page
-            print("Opening compose tweet page...")
-            self.auth.make_request('GET', "https://twitter.com/compose/post")
+            # Simulate thinking about what to post
+            compose_thinking = random.uniform(4.0, 10.0)
+            print(f"Thinking about what to post for {compose_thinking:.2f} seconds...")
+            time.sleep(compose_thinking)
             
         except Exception as e:
-            # Just log and continue if this fails
-            print(f"Browsing simulation failed (continuing anyway): {e}")
+            print(f"Simulation failed (continuing anyway): {e}")
         
         # Add a small random delay before posting (simulates typing/thinking)
         thinking_time = random.uniform(10.0, 19.0)
@@ -80,6 +65,8 @@ class TwitterPost:
         time.sleep(thinking_time)
         
         print(f"\nAttempting to create tweet: {text}")
+        if reply_to_id:
+            print(f"As reply to tweet: {reply_to_id}")
     
         # Use the correct GraphQL endpoint and query ID
         url = "https://twitter.com/i/api/graphql/UYy4T67XpYXgWKOafKXB_A/CreateTweet" 
@@ -95,7 +82,14 @@ class TwitterPost:
             "semantic_annotation_ids": [],
             "disallowed_reply_options": None,
         }
-        
+
+        # Add reply parameters if we're replying to a tweet
+        if reply_to_id:
+            variables["reply"] = {
+                "in_reply_to_tweet_id": reply_to_id,
+                "exclude_reply_user_ids": []
+            }
+            
         # Generate a stable client UUID if we don't have one
         if not hasattr(self, 'client_uuid'):
             import uuid
