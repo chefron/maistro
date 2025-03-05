@@ -27,7 +27,7 @@ import logging
 
 from dotenv import load_dotenv
 from auth import TwitterAuth
-from post import TwitterPost
+from api_post import APITwitterPost
 
 # Configure logging
 logging.basicConfig(
@@ -92,7 +92,7 @@ def _scheduler_loop(auth: TwitterAuth, content_generator: Callable[[], str]):
     _scheduler_running = True
     
     # Create a single TwitterPost instance to use throughout the scheduler
-    poster = TwitterPost(auth)
+    poster = APITwitterPost(auth)
     
     try:
         # Immediately post the first tweet

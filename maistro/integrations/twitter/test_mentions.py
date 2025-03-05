@@ -33,9 +33,9 @@ import signal
 
 # Import from our project modules
 from auth import TwitterAuth
-from post import TwitterPost
 from scheduler import schedule_tweets, start_scheduler, stop_scheduler, _get_interval_settings
 from mentions import start_mentions_checker, stop_mentions_checker
+from api_post import APITwitterPost
 
 # Load environment variables
 load_dotenv()
@@ -112,7 +112,7 @@ def main():
         print("\nStarting scheduler to post tweets at randomized intervals...")
         start_scheduler(
             auth=auth,
-            content_generator=TwitterPost.generate_random_tweet
+            content_generator=APITwitterPost.generate_random_tweet
         )
     
     # Start mentions checker if enabled

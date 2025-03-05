@@ -18,8 +18,8 @@ from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
 
 from auth import TwitterAuth
-from post import TwitterPost
 from utils import TwitterError
+from api_post import APITwitterPost
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +39,7 @@ class MentionsHandler:
             raise TwitterError ("Not authenticated. Please login first.")
         
         self.username = self.auth.username
-        self.poster = TwitterPost(auth)
+        self.poster = APITwitterPost(auth)
 
         # Create cache directory if it doesn't exist
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
