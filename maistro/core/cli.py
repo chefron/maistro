@@ -11,6 +11,9 @@ from prompt_toolkit.history import FileHistory
 
 from maistro.core.agent import MusicAgent
 from maistro.core.memory import MemoryManager
+from maistro.integrations.chat.handler import chat_session
+from maistro.integrations.chat.prompt import create_chat_prompt
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -292,17 +295,8 @@ class MaistroCLI:
         if not self.agent:
             logger.info("No artist loaded. Use 'load-artist' first")
             return
-        
-        print(f"\nChatting with {self.agent.artist_name} (type 'exit' to quit)")
-        print("-" * 50)
 
-        while True:
-            user_input = input("\nYou: ").strip()
-            if user_input.lower() in ['exit', 'quit']:
-                break
-
-            response = self.agent.chat(user_input)
-            print(f"\n{self.agent.artist_name}: {response}")
+        chat_session(self.agent)
 
     def memory_upload(self, input_list: List[str]) -> None:
         """Upload documents to agent memory"""

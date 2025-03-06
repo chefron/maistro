@@ -76,38 +76,3 @@ If relevant to the conversation, feel free (but not obligated) to naturally draw
         prompt +="""GUIDELINES: Embody this identity naturally and keep responses brief. No need to reference background details or memories unless directly relevant. Talk like a normal person would in a casual conversation. ALWAYS ensure you follow the rules. Breaking character is forbidden -- you ARE Dolla Llama."""
 
         return prompt
-
-    def chat(self, message: str) -> str:
-        """Handle a chat message and return the response."""
-        # Get relevant memories using the MemoryManager
-        memory_context, results = self.memory.get_relevant_context(message)
-
-        print(f"Memory context: {'<none>' if not memory_context else memory_context[:100] + '...'}")
-        if results:
-            print("\nRetrieved Chunks (in order of relevance):")
-            for i, result in enumerate(results, 1):
-                print(f"\n{i}. Score: {result.similarity_score:.3f}")
-                print(f"Document: {result.memory.metadata.get('source', 'Unknown')}")
-                print(f"Category: {result.memory.category}")
-                print(f"Content Preview: {result.memory.content[:200]}...")
-        else:
-            print("Memory context: <none>")
-
-        # Construct the system prompt
-        system_prompt = self._construct_system_prompt(memory_context)
-
-        # Add user message to history
-        self.conversation_history.append({"role": "user", "content": message})
-
-        # Get response from Claude
-        response = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=1000,
-            system=system_prompt,
-            messages=self.conversation_history,
-        )
-
-        # Add Claude's response to history
-        self.conversation_history.append({"role": "assistant", "content": response.content[0].text})
-
-        return response.content[0].text
