@@ -27,7 +27,7 @@ def create_chat_prompt(
     )
     
     # Add chat-specific instructions
-    chat_instructions = "\n\nCURRENT TASK: You're chatting with a user. Don't reference background details or memories unless directly relevant. Talk like a normal person would in a casual conversation. ALWAYS ensure you're following the rules before replying."
+    chat_instructions = "\n\nCURRENT TASK: You're chatting with a user. Don't reference background details or memories unless directly relevant. Talk like a normal person would in a casual conversation. Be CONCISE. ALWAYS ensure you're following the rules before replying."
     complete_prompt = character_prompt + chat_instructions
     
     return complete_prompt, prompt_path

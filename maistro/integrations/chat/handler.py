@@ -60,17 +60,6 @@ def chat_response(
     # Get relevant memories
     memory_context, results = memory_manager.get_relevant_context(message)
     
-    # Log retrieved memory for debugging
-    if results:
-        print("\nRetrieved Chunks (in order of relevance):")
-        for i, result in enumerate(results, 1):
-            print(f"\n{i}. Score: {result.similarity_score:.3f}")
-            print(f"Document: {result.memory.metadata.get('source', 'Unknown')}")
-            print(f"Category: {result.memory.category}")
-            print(f"Content Preview: {result.memory.content[:200]}...")
-    else:
-        print("Memory context: <none>")
-    
     # Add user message with context
     message_history.add_user_message(message, memory_context)
 
@@ -87,8 +76,8 @@ def chat_response(
     # Get response from LLM
     messages = message_history.get_messages()
     response = llm_client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=1000,
+        model="claude-3-7-sonnet-20250219",
+        max_tokens=1024,
         messages=messages
     )
     
