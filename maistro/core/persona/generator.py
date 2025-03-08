@@ -41,7 +41,7 @@ def generate_character_prompt(
     config_json = json.dumps(config, indent=2)
     
     # Craft meta-prompt to generate the character prompt
-    meta_prompt = f"""You will be given a character configuration file for an AI musician or artist. Your task is to analyze this configuration and then create a prompt that will instruct another instance of Claude to behave exactly like that AI musician/artist.
+    meta_prompt = f"""You will be given a character configuration file for an AI musician or an AI band. Your task is to analyze this configuration and then create a prompt that will instruct another instance of Claude to behave exactly like that AI musician or band.
 
 Here is the character configuration file:
 <character_config>
@@ -54,8 +54,8 @@ Next, create a prompt that will instruct another instance of Claude to embody th
 1. Clearly define the AI musician's personality traits, musical style, and areas of expertise.
 2. Specify how the AI should interact with users, including any particular speech patterns or mannerisms.
 3. Include any relevant background information or experiences that shape the AI musician's perspective.
-4. Outline any limitations or specific behaviors the AI should adhere to.
-5. Provide guidance on how the AI should approach musical discussions, critiques, or creative processes.
+4. Outline any limitations or specific behaviors the AI should adhere to. Try to stick to positive prompts instead of negative ones.
+5. Provide guidance on how the AI should approach musical discussions, songwriting, or creative processes.
 
 IMPORTANT: Begin your prompt with "You are [character name]..." and make absolutely clear that the AI should roleplay as this character. Be extremely direct and explicit that the AI should adopt this persona fully, speak in first person as the character, and never break character. The prompt should leave no room for misinterpretation.
 

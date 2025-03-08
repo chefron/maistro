@@ -3,6 +3,7 @@ import logging
 import threading
 import time
 import io
+from datetime import datetime
 from typing import Dict, List, Optional, Callable, Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -12,6 +13,8 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 from dotenv import load_dotenv
 from maistro.core.agent import MusicAgent
+from maistro.core.llm.messages import MessageHistory
+from maistro.core.persona.generator import generate_character_prompt
 
 load_dotenv()
 
@@ -26,8 +29,8 @@ def setup_oauth(client_id: str, client_secret: str) -> Optional[str]:
                     "client_id": client_id,
                     "client_secret": client_secret,
                     "redirect_uris": [
-                        "http://localhost:8080",
-                        "http://localhost"
+                        "http://localhost",
+                        "http://localhost:8080/"
                     ],
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
@@ -36,11 +39,32 @@ def setup_oauth(client_id: str, client_secret: str) -> Optional[str]:
             scopes=['https://www.googleapis.com/auth/youtube.force-ssl']
         )
 
-        credentials = flow.run_local_server(port=8080, open_browser=True)
-        return credentials.refresh_token
+        # Try to run the local server flow, but catch specific errors
+        try:
+            print("\nAttempting to start authentication flow...")
+            # Use a higher port number which is less likely to be in use
+            credentials = flow.run_local_server(port=8080, open_browser=True)
+            print("Authentication successful!")
+            return credentials.refresh_token
+        except OSError as e:
+            print(f"Error starting local server: {e}")
+            # If the local server fails, fall back to manual entry
+            print("\nFalling back to manual authentication.")
+            print("Please manually copy the following URL to your browser:")
+            auth_url, _ = flow.authorization_url(prompt='consent')
+            print(auth_url)
+            print("\nAfter authorizing, you'll be redirected to an error page.")
+            print("Copy the 'code' parameter from the URL and paste it here:")
+            code = input("Enter the authorization code: ")
+            
+            # Exchange the code for credentials
+            flow.fetch_token(code=code)
+            credentials = flow.credentials
+            print("Authentication successful!")
+            return credentials.refresh_token
     
     except Exception as e:
-        logger.error(f"Oauth setup failed: {e}")
+        logger.error(f"OAuth setup failed: {e}")
         return None
     
 def get_oauth_client() -> Optional[object]:
@@ -284,6 +308,26 @@ class AgentResponder:
     def __init__(self, agent):
         self.agent = agent
         self.monitor = CommentMonitor()
+    
+    def create_youtube_prompt(self) -> str:
+        """
+        Create a YouTube-specific prompt using the character prompt
+        
+        Returns:
+            Complete prompt string for YouTube comment interactions
+        """
+        # Get the base character prompt
+        character_prompt, _ = generate_character_prompt(
+            config=self.agent.config,
+            artist_name=self.agent.artist_name,
+            client=self.agent.client
+        )
+        
+        # Add YouTube-specific instructions
+        youtube_instructions = "\n\nCURRENT TASK: You're responding to a comment on your YouTube video. Keep your response conversational, authentic to your character, and relatively brief. Engage with the fan in a way that feels natural and on-brand for you."
+        
+        complete_prompt = character_prompt + youtube_instructions
+        return complete_prompt
         
     def get_video_captions(self, video_id: str) -> Optional[str]:
         """Get captions for a video to provide context"""
@@ -373,31 +417,55 @@ class AgentResponder:
             logger.info(f"Comment: {comment['text']}")
 
             # Get video context from captions if available
-            context = self.get_video_captions(comment['video_id'])
+            video_context = self.get_video_captions(comment['video_id'])
 
-            if context:
-                print("Cleaned video captions:")
-                print(context)
-            else:
-                print("No captions available for this video.")
+            # Get relevant memories from agent's memory
+            memory_context, _ = self.agent.memory.get_relevant_context(comment['text'])
+            
+            # Create a new YouTube-specific prompt for this comment
+            youtube_prompt = self.create_youtube_prompt()
+            
+            # Create a new message history for this specific comment
+            message_history = MessageHistory(youtube_prompt)
+            
+            # Get current date and time
+            current_datetime = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+            
+            # Construct prompt for the specific comment
+            prompt = f"""Responding to a YouTube comment:
 
-            context_msg = f"\nVideo context: {context}" if context else "\nNo video context available"
+From: {comment['author']} (on {current_datetime})
+Comment: {comment['text']}"""
 
-            # Construct prompt for the agent
-            prompt = f"""Please help me respond to this YouTube comment:
+            if video_context:
+                prompt += f"\n\nVideo context: {video_context}"
+            
+            # Add the user message to history (with memory context)
+            message_history.add_user_message(prompt, memory_context)
+            
+            # Get response from LLM
+            messages = message_history.get_messages()
 
-From: {comment['author']}
-Comment: {comment['text']}
-Video captions: {context_msg}
+            # Print messages for debugging
+            print("\n========== ALL MESSAGES SENT TO LLM ==========")
+            for idx, msg in enumerate(messages):
+                print(f"Message {idx} ({msg['role']}):")
+                print(msg['content'])
+                print("---------------------------------------------")
+            print("===============================================\n")
 
-Please write a concise response to the comment. If video captions are provided, you can use them for context, but don't feel obligated to do so."""
-
-            # Generate response using the agent
-            response = self.agent.chat(prompt)
-
+            response = self.agent.client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=1024,
+                messages=messages
+            )
+            
+            # Extract response text
+            response_text = response.content[0].text
+            
             # Post the response
-            if post_comment_reply(comment['id'], response):
-                logger.info(f"✅ Posted response: {response}")
+            if post_comment_reply(comment['id'], response_text):
+                logger.info(f"✅ Posted response: {response_text}")
             else:
                 logger.error("Failed to post response")
 
@@ -407,17 +475,118 @@ Please write a concise response to the comment. If video captions are provided, 
 if __name__ == "__main__":
     # Example usage
     load_dotenv()
-
-    agent = MusicAgent("dolla-llama")  # Replace with the appropriate artist name
-    responder = AgentResponder(agent)
-
-    # Start monitoring
-    monitor = CommentMonitor()
-    if monitor.start(responder.handle_comment):
-        print("\nMonitoring started! Press Ctrl+C to stop...")
+    
+    print("\n=== YouTube Engagement Tool ===\n")
+    
+    # Check for existing OAuth credentials
+    refresh_token = os.getenv('YOUTUBE_REFRESH_TOKEN')
+    client_id = os.getenv('YOUTUBE_CLIENT_ID')
+    client_secret = os.getenv('YOUTUBE_CLIENT_SECRET')
+    
+    if not client_id or not client_secret:
+        print("ERROR: Missing YouTube API credentials")
+        print("Please set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in your .env file")
+        exit(1)
+    
+    # If no refresh token, perform OAuth flow manually
+    if not refresh_token:
+        print("No refresh token found. Starting OAuth authorization flow...\n")
+        
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            monitor.stop()
-            print("\nMonitoring stopped!")
+            # Create client config dictionary
+            client_config = {
+                "installed": {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "redirect_uris": ["http://localhost:8080", "http://localhost"],
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token"
+                }
+            }
+            
+            # Create flow with this config and scopes
+            flow = InstalledAppFlow.from_client_config(
+                client_config,
+                scopes=['https://www.googleapis.com/auth/youtube.force-ssl']
+            )
+            
+            # Force requesting a refresh token by setting access_type to offline
+            # and approval_prompt to force (to prompt even if previously authorized)
+            flow.oauth2session.redirect_uri = 'http://localhost:8080/'
+            
+            auth_url, _ = flow.authorization_url(
+                access_type='offline',
+                prompt='consent',  # Force re-consent even if previously approved
+                include_granted_scopes='true'
+            )
+            
+            print(f"Please visit this URL to authorize the application:\n{auth_url}\n")
+            
+            # Run local server with specific parameters
+            credentials = flow.run_local_server(
+                port=8080,
+                open_browser=True,
+                authorization_prompt_message="Please complete the authorization in your browser"
+            )
+            
+            # Extract and display the refresh token
+            refresh_token = credentials.refresh_token
+            
+            if refresh_token:
+                print("\n=== OAuth SUCCESSFUL! ===")
+                print(f"Refresh Token: {refresh_token}")
+                print("\nIMPORTANT: Add this to your .env file as:")
+                print(f"YOUTUBE_REFRESH_TOKEN={refresh_token}")
+                print("=========================\n")
+                
+                # Set for current session
+                os.environ['YOUTUBE_REFRESH_TOKEN'] = refresh_token
+            else:
+                print("ERROR: No refresh token received. This typically means:")
+                print("1. The application was already authorized (try revoking access at https://myaccount.google.com/permissions)")
+                print("2. There may be a bug in the OAuth flow implementation")
+                exit(1)
+                
+        except Exception as e:
+            print(f"OAuth Error: {str(e)}")
+            print("\nTroubleshooting tips:")
+            print("1. Ensure port 8080 is free (check with 'sudo lsof -i :8080')")
+            print("2. Verify your client_id and client_secret are correct")
+            print("3. Try revoking existing permissions at https://myaccount.google.com/permissions")
+            exit(1)
+    else:
+        print(f"Using existing refresh token from .env file")
+    
+    # Create agent and start monitoring only if we have a refresh token
+    if os.getenv('YOUTUBE_REFRESH_TOKEN'):
+        try:
+            print("\nInitializing Music Agent...")
+            agent = MusicAgent("dolla-llama")  # Replace with appropriate artist name
+            
+            print("Setting up YouTube responder...")
+            responder = AgentResponder(agent)
+            
+            print("Testing YouTube API connection...")
+            channel_id = get_channel_id()
+            if not channel_id:
+                print("ERROR: Could not retrieve YouTube channel ID")
+                print("This suggests an authentication issue with your token")
+                exit(1)
+            
+            print(f"Successfully connected to YouTube channel: {channel_id}")
+            
+            # Start monitoring
+            print("\nStarting comment monitor...")
+            monitor = CommentMonitor()
+            if monitor.start(responder.handle_comment):
+                print("\nMonitoring started! Press Ctrl+C to stop...")
+                try:
+                    while True:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    monitor.stop()
+                    print("\nMonitoring stopped!")
+            else:
+                print("\nFailed to start monitoring. Check logs for details.")
+        except Exception as e:
+            print(f"Error: {e}")

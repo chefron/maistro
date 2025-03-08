@@ -1,4 +1,5 @@
 from typing import Dict, Any, Optional, Tuple
+from datetime import datetime
 from anthropic import Anthropic
 from maistro.core.persona.generator import generate_character_prompt
 
@@ -25,9 +26,12 @@ def create_chat_prompt(
         artist_name=artist_name,
         client=client
     )
+
+    # Get current date and time
+    current_datetime = datetime.now().strftime("%B %d, %Y at %I:%M %p")
     
     # Add chat-specific instructions
-    chat_instructions = "\n\nCURRENT TASK: You're chatting with a user. Don't reference background details or memories unless directly relevant. Talk like a normal person would in a casual conversation. Be CONCISE. ALWAYS ensure you're following the rules before replying."
+    chat_instructions = f"\n\nCURRENT TASK: You're chatting with a user on {current_datetime}. Don't reference background details or memories unless directly relevant. Talk like a normal person would in a casual conversation. Be CONCISE. ALWAYS ensure you're following the rules before replying."
     complete_prompt = character_prompt + chat_instructions
     
     return complete_prompt, prompt_path
