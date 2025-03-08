@@ -324,7 +324,7 @@ class AgentResponder:
         )
         
         # Add YouTube-specific instructions
-        youtube_instructions = "\n\nCURRENT TASK: You're responding to a comment on your YouTube video. Keep your response conversational, authentic to your character, and relatively brief. Engage with the fan in a way that feels natural and on-brand for you."
+        youtube_instructions = "\n\nCURRENT TASK: You're responding to a comment on your YouTube video (captions supplied for context). Keep your response conversational, authentic to your character, and relatively brief. Engage with the fan in a way that feels natural and on-brand for you."
         
         complete_prompt = character_prompt + youtube_instructions
         return complete_prompt
@@ -359,7 +359,6 @@ class AgentResponder:
                     _, done = downloader.next_chunk()
 
                 captions_text = fh.getvalue().decode("utf-8")  # Decode bytes to string
-                print(captions_text)
 
                 return self._clean_captions(captions_text)
 
@@ -388,9 +387,6 @@ class AgentResponder:
             return None
         
         try:
-            print("\nRaw captions:")
-            print(captions)
-
             subtitle_lines = []
             for line in captions.split('\n'):
                 line = line.strip()
@@ -411,7 +407,7 @@ class AgentResponder:
             return None
 
     def handle_comment(self, comment: Dict[str, Any]) -> None:
-        """Process a new comment and generate a response"""
+        """Process a new comment and generate a response using a balanced memory approach"""
         try:
             logger.info(f"\nProcessing comment from {comment['author']}")
             logger.info(f"Comment: {comment['text']}")
@@ -419,9 +415,29 @@ class AgentResponder:
             # Get video context from captions if available
             video_context = self.get_video_captions(comment['video_id'])
 
-            # Get relevant memories from agent's memory
-            memory_context, _ = self.agent.memory.get_relevant_context(comment['text'])
+            # BALANCED APPROACH: First query memory with just the comment
+            comment_memory_context, comment_results = self.agent.memory.get_relevant_context(
+                query=comment['text'],
+                n_results=3  # Get top 3 results for comment
+            )
             
+            # Then query with captions if available
+            caption_memory_context = ""
+            if video_context:
+                caption_memory_context, caption_results = self.agent.memory.get_relevant_context(
+                    query=video_context,
+                    n_results=2  # Get top 2 results for captions
+                )
+            
+            # Combine memory contexts, prioritizing comment-related memories
+            combined_memory_context = comment_memory_context
+            
+            # Add unique caption context only if it exists and doesn't duplicate comment context
+            if caption_memory_context:
+                # Simple approach to avoid duplication - in production you might want more sophisticated deduplication
+                if caption_memory_context not in combined_memory_context:
+                    combined_memory_context += "\n\n" + caption_memory_context
+                    
             # Create a new YouTube-specific prompt for this comment
             youtube_prompt = self.create_youtube_prompt()
             
@@ -434,14 +450,14 @@ class AgentResponder:
             # Construct prompt for the specific comment
             prompt = f"""Responding to a YouTube comment:
 
-From: {comment['author']} (on {current_datetime})
-Comment: {comment['text']}"""
+    From: {comment['author']} (on {current_datetime})
+    Comment: {comment['text']}"""
 
             if video_context:
-                prompt += f"\n\nVideo context: {video_context}"
+                prompt += f"\n\nVideo context from captions: {video_context}"
             
-            # Add the user message to history (with memory context)
-            message_history.add_user_message(prompt, memory_context)
+            # Add the user message to history (with combined memory context)
+            message_history.add_user_message(prompt, combined_memory_context)
             
             # Get response from LLM
             messages = message_history.get_messages()
@@ -463,9 +479,14 @@ Comment: {comment['text']}"""
             # Extract response text
             response_text = response.content[0].text
             
+            # Print the agent's response prominently
+            print("\n========== AGENT RESPONSE ==========")
+            print(response_text)
+            print("=====================================\n")
+            
             # Post the response
             if post_comment_reply(comment['id'], response_text):
-                logger.info(f"✅ Posted response: {response_text}")
+                logger.info(f"✅ Posted response successfully!")
             else:
                 logger.error("Failed to post response")
 

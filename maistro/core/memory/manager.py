@@ -84,17 +84,6 @@ class MemoryManager:
             n_results=n_results
         )
 
-        print(f"\nSearch Results for query: \"{query}\"")
-        if results:
-            print("\nRetrieved Chunks (in order of relevance):")
-            for i, result in enumerate(results, 1):
-                print(f"\n{i}. Score: {result.similarity_score:.3f}")
-                print(f"Category: {result.memory.category}")
-                print(f"Source: {result.memory.metadata.get('source', 'Unknown')}")
-                print(f"Content Preview: {result.memory.content[:200]}...")
-        else:
-            print("No relevant memories found.")
-
         if not results:
             return "", []
         
