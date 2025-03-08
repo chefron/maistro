@@ -13,6 +13,7 @@ from maistro.core.agent import MusicAgent
 from maistro.core.memory import MemoryManager
 from maistro.integrations.chat.handler import chat_session
 from maistro.integrations.chat.prompt import create_chat_prompt
+from maistro.integrations.youtube.engagement import AgentResponder, CommentMonitor
 
 
 logging.basicConfig(
@@ -41,6 +42,13 @@ class MaistroCLI:
         # Create config directory
         self.config_dir = Path.home() / '.maistro'
         self.config_dir.mkdir(exist_ok=True)
+
+        # Flag to track active chat session
+        self.in_chat_session = False
+
+        # Initialize YouTube monitoring components
+        self.youtube_monitor = None
+        self.youtube_responder = None
 
         # Initialize commands and prompt toolkit
         self._initialize_commands()
@@ -85,6 +93,27 @@ class MaistroCLI:
                 tips="Use 'exit' or 'quit' to end the chat session",
                 handler=self.start_chat,
                 aliases=['talk']
+            )
+        )
+
+        self._register_command(
+            Command(
+                name="start-youtube",
+                description="Start YouTube comment monitoring and auto-responses",
+                tips=["Starts a background process that monitors your YouTube channel",
+                      "and automatically responds to new comments using the loaded artist"],
+                handler=self.start_youtube_monitoring,
+                aliases=['youtube-start', 'monitor-youtube']
+            )
+        )
+
+        self._register_command(
+            Command(
+                name="stop-youtube",
+                description="Stop YouTube comment monitoring",
+                tips=["Stops the background YouTube monitoring process"],
+                handler=self.stop_youtube_monitoring,
+                aliases=['youtube-stop']
             )
         )
 
@@ -297,6 +326,59 @@ class MaistroCLI:
             return
 
         chat_session(self.agent)
+
+    def start_youtube_monitoring(self, input_list: List[str]) -> None:
+        """Start monitoring YouTube comments and respond automatically"""
+        if not self.agent:
+            logger.info("No artist loaded. Use 'load-artist' first")
+            return
+        
+        # Check if monitoring is already running
+        if hasattr(self, 'youtube_monitor') and self.youtube_monitor and getattr(self.youtube_monitor, '_running', False):
+            logger.info("YouTube monitoring is already running")
+            return
+        
+        # Initialize the monitor and responder if needed
+        if not hasattr(self, 'youtube_monitor') or not self.youtube_monitor:
+            self.youtube_monitor = CommentMonitor()
+        
+        if not hasattr(self, 'youtube_responder') or not self.youtube_responder:
+            self.youtube_responder = AgentResponder(self.agent)
+        
+        # Check OAuth is properly set up
+        if not self.youtube_monitor.initialize_oauth():
+            logger.error("Failed to initialize YouTube OAuth. Please check your credentials.")
+            return
+        
+        # Start monitoring
+        interval = 300  # Check every 5 minutes by default
+        if len(input_list) > 1:
+            try:
+                interval = int(input_list[1]) * 60  # Convert minutes to seconds
+            except ValueError:
+                logger.warning(f"Invalid interval '{input_list[1]}', using default 2 minutes")
+        
+        success = self.youtube_monitor.start(
+            callback=self.youtube_responder.handle_comment,
+            interval=interval
+        )
+        
+        if success:
+            logger.info(f"✅ Started YouTube monitoring with {self.agent.artist_name}")
+            logger.info(f"Checking for new comments every {interval//60} minutes")
+        else:
+            logger.error("Failed to start YouTube monitoring")
+
+    def stop_youtube_monitoring(self, input_list: List[str]) -> None:
+        """Stop YouTube comment monitoring"""
+        if not hasattr(self, 'youtube_monitor') or not self.youtube_monitor:
+            logger.info("YouTube monitoring is not initialized")
+            return
+        
+        if self.youtube_monitor.stop():
+            logger.info("✅ Stopped YouTube monitoring")
+        else:
+            logger.info("YouTube monitoring is not currently running")
 
     def memory_upload(self, input_list: List[str]) -> None:
         """Upload documents to agent memory"""

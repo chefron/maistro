@@ -225,13 +225,13 @@ class CommentMonitor:
                 return False
         return True
 
-    def start(self, callback: Callable[[Dict], None], interval: int = 60) -> bool:
+    def start(self, callback: Callable[[Dict], None], interval: int = 300) -> bool:
         """
         Start monitoring channel for new comments
 
         Args:
             callback: Function to call with new comments
-            interval: Seconds between chunks (default 60)
+            interval: Seconds between chunks (default 5 mintues)
         """
 
         if self._running:
@@ -324,7 +324,7 @@ class AgentResponder:
         )
         
         # Add YouTube-specific instructions
-        youtube_instructions = "\n\nCURRENT TASK: You're responding to a comment on your YouTube video (captions supplied for context). Keep your response conversational, authentic to your character, and relatively brief. Engage with the fan in a way that feels natural and on-brand for you."
+        youtube_instructions = "\n\nCURRENT TASK: You're responding to a comment on your YouTube video (captions provided for context). Keep your response conversational, authentic to your character, and relatively brief. Engage with the fan in a way that feels natural and on-brand for you."
         
         complete_prompt = character_prompt + youtube_instructions
         return complete_prompt
