@@ -1,73 +1,100 @@
-from chromadb import PersistentClient
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
 from typing import Dict, List, Optional
 from uuid import uuid4
 import logging
 import math
 import os
+import inspect
 from pathlib import Path
+from sentence_transformers import SentenceTransformer
 from .types import Memory, SearchResult
 
-os.environ["ANONYMIZED_TELEMETRY"] = "false"
 logger = logging.getLogger('maistro.core.memory.store')
 
 class VectorStore:
-    """Vector database for storing and searching memories by category."""
+    """Vector database for storing and searching memories by category using Qdrant."""
     def __init__(self, artist_name: str):
         # Create path to artist's memory directory
-        self.db_path = Path(__file__).parent.parent.parent / "artists" / artist_name.lower() / "memory" / "memory_db"
+        self.db_path = Path(__file__).parent.parent.parent / "artists" / artist_name.lower() / "memory" / "qdrant_db"
         logger.info(f"Initializing VectorStore with path: {self.db_path}")
         
         # Create memory_db directory if it doesn't exist
         self.db_path.mkdir(exist_ok=True)
 
         # Create a persistent client with artist-specific path
-        self.client = PersistentClient(path=str(self.db_path))
-        self.collections = {}
+        self.client = QdrantClient(path=str(self.db_path))
+        self.collections = set()
+        
+        # Initialize embedding model
+        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.vector_size = self.embedding_model.get_sentence_embedding_dimension()
+        logger.info(f"Initialized SentenceTransformer model with dimension: {self.vector_size}")
 
         # Load existing collections
         try:
-            collection_names = self.client.list_collections()
-            logger.info(f"Found existing collections: {collection_names}")
-            for name in collection_names:
-                try:
-                    self.collections[name] = self.client.get_collection(name)
-                    logger.info(f"Loaded collection: {name}")
-                except Exception as e:
-                    logger.error(f"Error loading collection {name}: {e}")
+            collection_list = self.client.get_collections().collections
+            for collection in collection_list:
+                self.collections.add(collection.name)
+            logger.info(f"Found existing collections: {self.collections}")
         except Exception as e:
             logger.error(f"Error loading existing collections: {e}")
 
-    def _clean_metadata(self, metadata: Dict) -> Dict:
-        """Clean metadata to ensure all values are ChromaDB-compatible types"""
-        cleaned = {}
-        for key, value in metadata.items():
-            # Convert none to empty string
-            if value is None:
-                cleaned[key] = ""
-            # Convert any other values to strings if they're not primitive types
-            elif not isinstance(value, (str, int, float, bool)):
-                cleaned[key] = str(value)
-            else:
-                cleaned[key] = value
-        return cleaned
+    def _create_collection_if_not_exists(self, category: str) -> None:
+        """Create a new collection if it doesn't already exist"""
+        if category in self.collections:
+            return
+            
+        try:
+            # Create the collection
+            self.client.create_collection(
+                collection_name=category,
+                vectors_config=models.VectorParams(
+                    size=self.vector_size, 
+                    distance=models.Distance.COSINE
+                )
+            )
+            self.collections.add(category)
+            logger.info(f"Created new collection: {category}")
+        except Exception as e:
+            logger.error(f"Error creating collection {category}: {e}")
+            raise
+    
+    def _get_embeddings(self, text: str) -> List[float]:
+        """Generate embeddings for text content using SentenceTransformers"""
+        try:
+            # Generate embeddings
+            embedding = self.embedding_model.encode(text, normalize_embeddings=True)
+            return embedding.tolist()
+        except Exception as e:
+            logger.error(f"Error generating embeddings: {e}")
+            # Return a zero vector as fallback (not ideal but prevents crashes)
+            return [0.0] * self.vector_size
     
     def add(self, category: str, content: str, metadata: Dict) -> Memory:
         """Add a new memory"""
-        if category not in self.collections:
-            logger.info(f"Creating new collection: {category}")
-            self.collections[category] = self.client.create_collection(category)
+        self._create_collection_if_not_exists(category)
         
-        collection = self.collections[category]
         memory_id = str(uuid4())
         logger.info(f"Adding memory {memory_id} to collection {category}")
 
         try:
-            clean_metadata = self._clean_metadata(metadata)
-
-            collection.add(
-                documents=[content],
-                metadatas=[clean_metadata],
-                ids=[memory_id]
+            # Get embeddings for the content
+            embedding = self._get_embeddings(content)
+            
+            # Store content in the payload
+            payload = {**metadata, "content": content}
+            
+            # Store in Qdrant
+            self.client.upsert(
+                collection_name=category,
+                points=[
+                    models.PointStruct(
+                        id=memory_id,
+                        vector=embedding,
+                        payload=payload
+                    )
+                ]
             )
 
             return Memory(
@@ -83,7 +110,7 @@ class VectorStore:
         
     def list_categories(self) -> List[str]:
         """List all categories"""
-        return list(self.collections.keys())
+        return list(self.collections)
     
     def get_memories(
         self,
@@ -91,26 +118,40 @@ class VectorStore:
         n_results: int = 10,
         filter_metadata: Optional[Dict] = None
     ) -> List[Memory]:
-        """Get most recent memories from a category"""
+        """Get memories from a category with optional filtering"""
         if category not in self.collections:
             return []
         
-        collection = self.collections[category]
-        results = collection.get(
-            where=filter_metadata,
-            limit=n_results,
-        )
-
-        memories = []
-        for i in range(len(results['ids'])):
-            memories.append(Memory(
-                id=results['ids'][i],
-                content=results['documents'][i],
-                category=category,
-                metadata=results['metadatas'][i],
-            ))
-        
-        return memories[::-1] # Reverse to get the most recent first
+        try:
+            # Convert filter_metadata to Qdrant filter format
+            qdrant_filter = None
+            if filter_metadata:
+                qdrant_filter = self._metadata_to_filter(filter_metadata)
+            
+            # Scroll through points without vector search (retrieves in insertion order)
+            points = self.client.scroll(
+                collection_name=category,
+                limit=n_results,
+                scroll_filter=qdrant_filter
+            )[0]  # The scroll method returns a tuple (points, next_page_offset)
+            
+            memories = []
+            for point in points:
+                payload = point.payload
+                content = payload.pop("content")  # Extract content from payload
+                
+                memories.append(Memory(
+                    id=str(point.id),
+                    content=content,
+                    category=category,
+                    metadata=payload
+                ))
+            
+            return memories
+            
+        except Exception as e:
+            logger.error(f"Error retrieving memories from {category}: {e}")
+            return []
 
     def search(
         self,
@@ -121,63 +162,101 @@ class VectorStore:
     ) -> List[SearchResult]:
         """Search for similar memories in a category"""
         if category not in self.collections:
-            print(f"Category {category} not found in collections: {list(self.collections.keys())}")
+            logger.info(f"Category {category} not found in collections: {list(self.collections)}")
             return []
 
-        collection = self.collections[category]
-
         try:
-            total_docs = len(collection.get()['ids'])
-            logger.info(f"Searching through {total_docs} documents in {category}")
-            if total_docs == 0:
-                logger.error("Collection is empty")
-                return []
+            # Get embeddings for the query
+            query_vector = self._get_embeddings(query)
             
-            n_results = min(n_results, total_docs)
-
-            results = collection.query(
-                query_texts=[query],
-                n_results=n_results,
-                where=filter_metadata,
-                include=['distances', 'documents', 'metadatas']
+            # Convert filter_metadata to Qdrant filter format
+            qdrant_filter = None
+            if filter_metadata:
+                qdrant_filter = self._metadata_to_filter(filter_metadata)
+            
+            search_results = self.client.search(
+                collection_name=category,
+                query_vector=query_vector,
+                limit=n_results,
+                query_filter=qdrant_filter
             )
-
-            search_results = []
-            for i in range(len(results['ids'][0])):
+            
+            results = []
+            for point in search_results:
+                payload = point.payload
+                content = payload.pop("content")  # Extract content from payload
+                
                 memory = Memory(
-                    id=results['ids'][0][i],
-                    content=results['documents'][0][i],
+                    id=str(point.id),
+                    content=content,
                     category=category,
-                    metadata=results['metadatas'][0][i]
+                    metadata=payload
                 )
-
-                # Calculate similarity score
-                distance = float(results['distances'][0][i])
-                similarity_score = math.exp(-distance)
+                
+                # Similarity score is provided by Qdrant
+                similarity_score = point.score
+                
+                # Apply category boost if needed
                 if category == "metrics":
-                    similarity_score *= 1.4  # Boost scores for metrics to keep at top of mind
-
-                search_results.append(SearchResult(
+                    similarity_score *= 1.1  # Boost scores for metrics to keep at top of mind
+                
+                results.append(SearchResult(
                     memory=memory,
                     similarity_score=similarity_score
                 ))
-
-            return search_results
+            
+            return results
 
         except Exception as e:
             logger.error(f"Error searching collection {category}: {e}")
             return []
+    
+    def _metadata_to_filter(self, metadata: Dict) -> models.Filter:
+        """Convert metadata dictionary to Qdrant filter format"""
+        conditions = []
+        
+        for key, value in metadata.items():
+            if isinstance(value, (list, tuple)):
+                # Handle lists (any value in the list matches)
+                conditions.append(
+                    models.FieldCondition(
+                        key=key,
+                        match=models.MatchAny(any=value)
+                    )
+                )
+            else:
+                # Handle single values
+                conditions.append(
+                    models.FieldCondition(
+                        key=key,
+                        match=models.MatchValue(value=value)
+                    )
+                )
+        
+        # Combine all conditions with AND logic
+        if len(conditions) == 1:
+            return conditions[0]
+        elif len(conditions) > 1:
+            return models.Filter(
+                must=conditions
+            )
+        else:
+            return None
     
     def delete(self, category: str, memory_id: str) -> bool:
         """Delete a specific memory"""
         if category not in self.collections:
             return False
         
-        collection = self.collections[category]
         logger.info(f"Deleting memory {memory_id} from collection {category}")
 
         try:
-            collection.delete(ids=[memory_id])
+            self.client.delete(
+                collection_name=category,
+                points_selector=models.PointIdsList(
+                    points=[memory_id]
+                )
+            )
             return True
         
         except Exception as e:
