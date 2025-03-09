@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 
 # Import from our project modules for compatibility
 from utils import TwitterError
+from maistro.core.persona.generator import generate_character_prompt
 
 # Load environment variables from .env file
 load_dotenv()
@@ -154,29 +155,53 @@ class APITwitterPost:
         logger.info(f"Simulating pre-tweet delay of {thinking_time:.2f} seconds...")
         time.sleep(thinking_time)
     
-    def generate_tweet_content(self) -> str:
-        """Generate tweet content using the agent"""
-        if not self.agent:
-            return APITwitterPost.generate_random_tweet()
-            
-        # Get system prompt for the agent
-        system_prompt = self.agent._construct_system_prompt()
+    def generate_tweet(self, agent, max_length=280):
+        """Generate a tweet using the agent"""
         
-        # Add Twitter-specific guidance to the prompt
-        twitter_prompt = "Create a short, engaging tweet that represents you as a musician. Keep it under 280 characters, make it sound authentic, and consider including a call to action or question to encourage engagement. Don't use hashtags unless they're genuinely relevant."
+        # Get the Twitter username from the current auth object
+        twitter_username = self.username or "user" # Fallback if username is not available
         
-        # Generate tweet using the agent
-        response = self.agent.client.messages.create(
+        # Create a Twitter-specific prompt using the character generator
+        # First get the base character prompt
+        character_prompt, _ = generate_character_prompt(
+            config=agent.config,
+            artist_name=agent.artist_name,
+            client=agent.client
+        )
+        
+        # Add Twitter-specific instructions
+        twitter_instructions = f"""
+
+CURRENT TASK: You're composing a tweet for Twitter. As {agent.artist_name}, write a single, authentic statement that reflects your personality and musical identity.
+
+- Post as if you were tweeting from the @{twitter_username} account.
+- Keep it brief and concise (maximum {max_length} characters).
+- Avoid asking questions - make statements instead.
+- Be authentic to your character voice and musical style.
+- Don't add commentary or acknowledge this as a request.
+- Don't use hashtags unless they're genuinely part of your natural voice.
+
+Just write the tweet text itself with no additional explanation."""
+        
+        complete_prompt = character_prompt + twitter_instructions
+        
+        # Debug output - print the entire prompt being sent to the LLM
+        print("\n========== PROMPT SENT TO LLM ==========")
+        print(complete_prompt)
+        print("========================================\n")
+        
+        # Use the combined prompt instead of system+user separation
+        response = agent.client.messages.create(
             model="claude-3-5-sonnet-20241022",
             max_tokens=150,  # Limit to a short response
-            system=system_prompt,
-            messages=[{"role": "user", "content": twitter_prompt}]
+            messages=[{"role": "user", "content": complete_prompt}]
         )
         
         tweet_content = response.content[0].text.strip()
         
-        # Ensure tweet is within Twitter character limit
-        if len(tweet_content) > 280:
-            tweet_content = tweet_content[:277] + "..."
+        # Ensure tweet is within character limit
+        if len(tweet_content) > max_length:
+            tweet_content = tweet_content[:max_length-3] + "..."
             
+        logger.info(f"Generated tweet: {tweet_content}")
         return tweet_content
