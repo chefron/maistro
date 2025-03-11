@@ -15,11 +15,13 @@ import threading
 import json
 import urllib.parse
 from typing import Dict, List, Optional, Callable, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from auth import TwitterAuth
 from utils import TwitterError
 from api_post import APITwitterPost
+from maistro.core.persona.generator import generate_character_prompt
+from conversation_tracker import ConversationTracker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,7 +38,7 @@ class MentionsHandler:
         """Initialize the mentions handler with an authenticated TwitterAuth instance."""
         self.auth = auth
         if not self.auth.csrf_token or not self.auth.username:
-            raise TwitterError ("Not authenticated. Please login first.")
+            raise TwitterError("Not authenticated. Please login first.")
         
         self.username = self.auth.username
         self.poster = APITwitterPost(auth)
@@ -45,39 +47,167 @@ class MentionsHandler:
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
 
-        # Load previously processed mentions
-        self.last_checked_id = self._load_last_checked_id()
+        cache_data = self._load_cache_data()
+        self.last_checked_id = cache_data.get('last_checked_id')
+        self.processed_tweet_ids = set(cache_data.get('processed_ids', []))
+        
+        # Initialize conversation tracker
+        self.conversation_tracker = ConversationTracker(self.cache_dir, self.username)
 
         logger.info(f"Initialized MentionsHandler for user @{self.username}")
         logger.info(f"Last checked mention ID: {self.last_checked_id}")
+        logger.info(f"Loaded {len(self.processed_tweet_ids)} previously processed tweets")
 
     def _get_cache_path(self) -> str:
-        """Get the path to the cache file for the last checked mention ID."""
-        return os.path.join(self.cache_dir, f"{self.username}_last_mention.txt")
-    
-    def _load_last_checked_id(self) -> Optional[str]:
-        """Load the ID of the last checked mention from cache."""
+        """Get the path to the cache file for mention tracking data."""
+        return os.path.join(self.cache_dir, f"{self.username}_mentions_cache.json")
+
+    def _load_cache_data(self) -> Dict:
+        """Load all cache data from a single file."""
         try:
             cache_path = self._get_cache_path()
             if os.path.exists(cache_path):
                 with open(cache_path, 'r') as f:
-                    return f.read().strip()
-            return None
+                    cache_data = json.load(f)
+                    logger.info(f"Loaded cache data with {len(cache_data.get('processed_ids', []))} processed tweets")
+                    return cache_data
+            return {
+                'last_checked_id': None,
+                'processed_ids': []
+            }
         except Exception as e:
-            logger.error(f"Error loading last checked mention ID: {e}")
-            return None
-        
-    def _save_last_checked_id(self, mention_id: str) -> None:
-        """Save the ID of the last checked mention to cache."""
+            logger.error(f"Error loading cache data: {e}")
+            return {
+                'last_checked_id': None,
+                'processed_ids': []
+            }
+            
+    def _save_cache_data(self) -> None:
+        """Save all cache data to a single file."""
         try:
             cache_path = self._get_cache_path()
+            cache_data = {
+                'last_checked_id': self.last_checked_id,
+                'processed_ids': list(self.processed_tweet_ids)
+            }
             with open(cache_path, 'w') as f:
-                f.write(mention_id)
-            logger.info(f"Updated last checked mention ID: {mention_id}")
+                json.dump(cache_data, f)
+            logger.info(f"Saved cache data with {len(self.processed_tweet_ids)} processed tweet IDs")
         except Exception as e:
-            logger.error(f"Error saving last checked mention ID: {e}")
+            logger.error(f"Error saving cache data: {e}")
 
-    def fetch_mentions(self, count: int = 20) -> List[Dict[str, Any]]:
+    def check_mentions(self, agent=None) -> int:
+        """
+        Check for new mentions and respond to them.
+        
+        Args:
+            agent: Optional MusicAgent instance for AI-generated replies
+            
+        Returns:
+            Number of mentions successfully processed
+        """
+        try:
+            # Fetch recent mentions
+            mentions = self.fetch_mentions()
+            
+            if not mentions:
+                logger.info("No new mentions found")
+                return 0
+                
+            # Process each mention
+            processed_count = 0
+            for mention in mentions:
+                # Skip mentions we've already processed
+                if mention["id"] in self.processed_tweet_ids:
+                    logger.info(f"Skipping already processed mention {mention['id']} from @{mention['username']}")
+                    continue
+                    
+                success = self.process_mention(mention, agent)
+                if success:
+                    processed_count += 1
+                    
+            logger.info(f"Processed {processed_count} out of {len(mentions)} mentions")
+            return processed_count
+            
+        except Exception as e:
+            logger.error(f"Error checking mentions: {e}")
+            return 0
+
+    def process_mention(self, mention: Dict[str, Any], agent=None) -> bool:
+        """
+        Process a single mention and generate a reply with conversation context.
+        
+        Args:
+            mention: The mention to process
+            agent: Optional MusicAgent instance for AI-generated replies
+            
+        Returns:
+            True if the mention was successfully processed, False otherwise
+        """
+        try:
+            # Get mention details
+            mention_id = mention["id"]
+            username = mention["username"]
+            
+            # Skip if we've already processed this mention
+            if mention_id in self.processed_tweet_ids:
+                logger.info(f"Skipping already processed mention {mention_id} from @{username}")
+                return False
+            
+            logger.info(f"Processing mention {mention_id} from @{username}")
+            
+            # Add to conversation tracker and get thread ID
+            thread_id = self.conversation_tracker.add_mention(mention)
+            
+            # Get conversation context
+            thread_context = self.conversation_tracker.get_thread_context(thread_id)
+            
+            # Generate reply using the agent and conversation context
+            reply = self.generate_reply(mention, agent, thread_context)
+
+            # Post the reply
+            logger.info(f"Replying to tweet {mention_id}: {reply}")
+            result = self.poster.create_tweet(reply, mention_id)
+            
+            # Extract tweet ID from API response
+            reply_tweet_id = None
+            
+            if isinstance(result, dict):
+                # Official Twitter API v2 response structure
+                if "data" in result and "id" in result["data"]:
+                    reply_tweet_id = result["data"]["id"]
+                else:
+                    logger.warning(f"Could not find tweet ID in response structure: {result}")
+            
+            # If we couldn't get the tweet ID, use a placeholder
+            if not reply_tweet_id:
+                import time
+                reply_tweet_id = f"unknown_{int(time.time())}"
+                logger.warning(f"Could not extract tweet ID from response, using placeholder: {reply_tweet_id}")
+            else:
+                logger.info(f"Successfully extracted reply tweet ID: {reply_tweet_id}")
+            
+            # Add bot's reply to the conversation thread
+            self.conversation_tracker.add_bot_reply(thread_id, reply_tweet_id, reply)
+
+            # Add the tweet ID to the processed set and save
+            self.processed_tweet_ids.add(mention_id)
+            self._save_cache_data()
+            
+            # Update last checked ID if this ID is newer
+            if not self.last_checked_id or mention_id > self.last_checked_id:
+                self.last_checked_id = mention_id
+                
+            logger.info(f"Successfully replied to mention {mention_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error processing mention: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+
+    def fetch_mentions(self, count: int = 20) -> List[Dict]:
         """Fetch recent mentions using the GraphQL API"""
         logger.info(f"Fetching up to {count} mentions for @{self.username}")
 
@@ -88,10 +218,6 @@ class MentionsHandler:
             "querySource": "typed_query",
             "product": "Latest"  # Always use Latest for mentions
         }
-
-        # Add cursor if we have one (for pagination)
-        if self.last_checked_id:
-            variables["cursor"] = self.last_checked_id
 
         # GraphQL features parameter (required)
         features = {
@@ -165,9 +291,6 @@ class MentionsHandler:
                 
             data = response.json()
             
-            # Debug the response structure
-          #  logger.debug(f"Response structure: {json.dumps(list(data.keys()))}")
-
             # Log the full API response for debugging
             logger.info(f"Full API response: {json.dumps(data, indent=2)}")
             
@@ -242,110 +365,159 @@ class MentionsHandler:
         except Exception as e:
             logger.error(f"Error fetching mentions: {e}")
             return []
-
-    def generate_reply(self, mention: Dict[str, Any]) -> str:
-        """Generate a reply to a mention."""
-        # Extract the mention text and remove the bot's username
-        text = mention["text"]
-        username = mention["username"]
-
-        # Simple response logic
-        if "hello" in text.lower() or "hi" in text.lower():
-            return f"Hi @{username}! 👋 Thanks for reaching out!"
         
-        if "help" in text.lower():
-            return f"@{username} I'm a bot that posts content at regular intervals. You can interact with me by mentioning me in a tweet."
-        
-        if "thanks" in text.lower() or "thank you" in text.lower():
-            return f"@{username} You're welcome! Happy to assist."
-            
-        if "what can you do" in text.lower():
-            return f"@{username} I can post tweets on a schedule, respond to mentions, and have simple conversations!"
-        
-        # Default response for other mentions
-        responses = [
-            f"@{username} Thanks for the mention! I'm just a simple bot but I appreciate the interaction.",
-            f"@{username} Hello there! I noticed your mention. How can I help?",
-            f"@{username} I see you mentioned me. I'm still learning, but I'm happy to chat!",
-            f"@{username} Thanks for reaching out! I'm a bot in development, but I'll do my best to respond.",
-        ]
-        
-        return random.choice(responses)
-
-    def process_mention(self, mention: Dict[str, Any]) -> bool:
+    def get_user_history_summary(self, username: str, max_threads: int = 3):
         """
-        Process a single mention and generate a reply.
+        Get complete previous conversations with a user
         
         Args:
-            mention: The mention to process
+            username: The Twitter username
+            max_threads: Maximum number of previous threads to include
             
         Returns:
-            True if the mention was successfully processed, False otherwise
+            A formatted history of past conversations
         """
-        try:
-            # Get mention details
-            mention_id = mention["id"]
-            username = mention["username"]
-            
-            logger.info(f"Processing mention {mention_id} from @{username}")
-
-            # Generate reply
-            reply = self.generate_reply(mention)
-
-            # Post the reply
-            logger.info(f"Replying to tweet {mention_id}: {reply}")
-            result = self.poster.create_tweet(reply, mention_id)
-
-            # Update last checked ID if this ID is newer
-            if not self.last_checked_id or mention_id > self.last_checked_id:
-                self._save_last_checked_id(mention_id)
+        # Find all threads with this user
+        user_threads = []
+        for thread_id, thread_data in self.conversations.items():
+            if thread_data["user"] == username:
+                # Add thread and its timestamp for sorting
+                try:
+                    timestamp = datetime.fromisoformat(thread_data["started_at"].replace('Z', '+00:00'))
+                except:
+                    timestamp = datetime.now() - timedelta(days=30)  # Default old time
                 
-            logger.info(f"Successfully replied to mention {mention_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error processing mention: {e}")
-            return False
-
-    def check_mentions(self) -> int:
-        """
-        Check for new mentions and respond to them.
+                user_threads.append((thread_id, thread_data, timestamp))
         
-        Returns:
-            Number of mentions successfully processed
+        # Sort threads by time (newest first) and take the most recent ones
+        user_threads.sort(key=lambda x: x[2], reverse=True)
+        recent_threads = user_threads[:max_threads]
+        
+        if not recent_threads:
+            return "No previous conversations with this user."
+        
+        # Build complete history
+        history = f"PREVIOUS CONVERSATIONS WITH @{username} (NOT PART OF CURRENT THREAD):\n\n"
+        
+        for i, (thread_id, thread_data, timestamp) in enumerate(recent_threads, 1):
+            # Get date in readable format
+            date_str = timestamp.strftime("%B %d, %Y")
+            
+            # Get all messages from this thread
+            messages = thread_data["messages"]
+            
+            # Add thread header
+            history += f"Conversation {i} (from {date_str}):\n"
+            
+            # Include ALL messages from the thread
+            for msg in messages:
+                if msg['sender'] == self.bot_username:
+                    history += f"You: {msg['text']}\n"
+                else:
+                    history += f"@{msg['sender']}: {msg['text']}\n"
+            
+            history += "\n"
+        
+        return history
+
+    def generate_reply(self, mention: Dict[str, Any], agent=None, thread_context: str = None) -> str:
         """
-        try:
-            # Fetch recent mentions
-            mentions = self.fetch_mentions()
+        Generate a reply to a mention, using an agent, with conversation context.
+        
+        Args:
+            mention: The mention to generate a reply for
+            agent: MusicAgent instance for AI-generated replies
+            thread_context: Optional conversation history
             
-            if not mentions:
-                logger.info("No new mentions found")
-                return 0
-                
-            # Process each mention
-            processed_count = 0
-            for mention in mentions:
-                success = self.process_mention(mention)
-                if success:
-                    processed_count += 1
-                    
-            logger.info(f"Processed {processed_count} out of {len(mentions)} mentions")
-            return processed_count
+        Returns:
+            The generated reply text
+        """
+        # Require an agent for generating replies
+        if not agent:
+            raise ValueError("Agent is required for generating replies")
+        
+        # Extract the mention text and username
+        text = mention["text"]
+        username = mention["username"]
+        
+        # Get current date and time for context
+        current_datetime = datetime.now().strftime("%B %d, %Y, %I:%M %p")
+        
+        # Create a mention-specific prompt using the character generator
+        character_prompt, _ = generate_character_prompt(
+            config=agent.config,
+            artist_name=agent.artist_name,
+            client=agent.client
+        )
+        
+        # Add mention-specific instructions with current date/time context
+        mention_instructions = f"""
+
+    CURRENT TASK: You're responding to a tweet that mentioned you. Please write a brief and authentic reply.
+
+    The tweet is from: @{username}
+    The tweet says: {text}
+    Current date and time: {current_datetime}
+    """
+
+        # Add current thread context if available
+        if thread_context:
+            mention_instructions += f"\n\nCURRENT THREAD:\n{thread_context}\n"
+        else:
+            mention_instructions += "\n\nThis is the start of a new conversation thread.\n"
+        
+        # Get user history from previous conversations
+        user_history = self.conversation_tracker.get_user_history_summary(username)
+        if user_history and "No previous conversations" not in user_history:
+            mention_instructions += f"\n\n{user_history}\n"
+
+        mention_instructions += """
+    - Keep your response casual and conversational.
+    - Maintain your unique voice and personality.
+    - Respond directly to what they're saying or asking in the current thread.
+    - Keep it brief (maximum 250 characters).
+    - Be authentic to your character.
+    - Don't add commentary or acknowledge this as a request.
+    - If relevant, you may subtly reference previous conversations from the history provided.
+
+    Just write the reply text itself with no additional explanation."""
+        
+        # Rest of the method remains the same...
+        
+        complete_prompt = character_prompt + mention_instructions
+        
+        # Debug output - print the entire prompt being sent to the LLM
+        print("\n========== MENTION RESPONSE PROMPT SENT TO LLM ==========")
+        print(complete_prompt)
+        print("=========================================================\n")
+        
+        # Use the combined prompt instead of system+user separation
+        response = agent.client.messages.create(
+            model="claude-3-7-sonnet-20250219",
+            max_tokens=150,  # Limit to a short response
+            messages=[{"role": "user", "content": complete_prompt}]
+        )
+        
+        response_text = response.content[0].text.strip()
+        
+        # Ensure response is within character limit
+        if len(response_text) > 250:
+            response_text = response_text[:247] + "..."
             
-        except Exception as e:
-            logger.error(f"Error checking mentions: {e}")
-            return 0
+        print(f"Generated mention response: {response_text}")
+        return response_text
 
 # Global variables for the mentions checker
 _mentions_running = False
 _mentions_thread = None
 
-def _mentions_loop(auth: TwitterAuth, interval: int = 120):
+def _mentions_loop(auth: TwitterAuth, agent=None, interval: int = 120):
     """
     Main loop for checking mentions at regular intervals.
     
     Args:
         auth: Authenticated TwitterAuth instance
+        agent: Optional MusicAgent instance for AI-generated replies
         interval: Time between mention checks in seconds
     """
     global _mentions_running
@@ -357,7 +529,7 @@ def _mentions_loop(auth: TwitterAuth, interval: int = 120):
     try:
         while _mentions_running:
             # Check for new mentions
-            processed = handler.check_mentions()
+            processed = handler.check_mentions(agent)
             
             # Wait for the next interval
             next_check = datetime.now().timestamp() + interval
@@ -377,12 +549,13 @@ def _mentions_loop(auth: TwitterAuth, interval: int = 120):
         
     logger.info("Mentions checker stopped")
 
-def start_mentions_checker(auth: TwitterAuth, interval: int = 120) -> threading.Thread:
+def start_mentions_checker(auth: TwitterAuth, agent=None, interval: int = 120) -> threading.Thread:
     """
     Start the mentions checker in a background thread.
     
     Args:
         auth: Authenticated TwitterAuth instance
+        agent: Optional MusicAgent instance for AI-generated replies
         interval: Time between mention checks in seconds
         
     Returns:
@@ -398,7 +571,7 @@ def start_mentions_checker(auth: TwitterAuth, interval: int = 120) -> threading.
     
     _mentions_thread = threading.Thread(
         target=_mentions_loop,
-        args=(auth, interval),
+        args=(auth, agent, interval),
         daemon=True
     )
     _mentions_thread.start()
@@ -421,9 +594,6 @@ def stop_mentions_checker() -> bool:
     else:
         logger.warning("Mentions checker is not running")
         return False
-
-
-
 
 
 

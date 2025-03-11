@@ -172,7 +172,7 @@ class APITwitterPost:
         # Add Twitter-specific instructions
         twitter_instructions = f"""
 
-CURRENT TASK: You're composing a tweet for Twitter. As {agent.artist_name}, write a single, authentic statement that reflects your personality and musical identity.
+CURRENT TASK: You're composing a tweet for Twitter. Please write a single authentic statement that reflects your personality and musical identity.
 
 - Post as if you were tweeting from the @{twitter_username} account.
 - Keep it brief and concise (maximum {max_length} characters).
