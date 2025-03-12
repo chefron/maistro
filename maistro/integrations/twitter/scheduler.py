@@ -26,8 +26,10 @@ from typing import Callable, Dict
 import logging
 
 from dotenv import load_dotenv
+
 from auth import TwitterAuth
 from api_post import APITwitterPost
+from conversation_tracker import ConversationTracker
 
 # Configure logging
 logging.basicConfig(
@@ -79,6 +81,12 @@ def _format_time_until(seconds: float) -> str:
         return f"{minutes}m {seconds}s"
     else:
         return f"{seconds}s"
+    
+def _get_or_create_conversation_tracker(auth: TwitterAuth):
+    """Create a conversation tracker for the authenticated user"""
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    return ConversationTracker(cache_dir, auth.username)
 
 def _scheduler_loop(auth: TwitterAuth, content_generator: Callable[[], str]):
     """
@@ -90,9 +98,12 @@ def _scheduler_loop(auth: TwitterAuth, content_generator: Callable[[], str]):
     """
     global _scheduler_running
     _scheduler_running = True
+
+    # Create the conversation tracker
+    conversation_tracker = _get_or_create_conversation_tracker(auth)
     
     # Create a single TwitterPost instance to use throughout the scheduler
-    poster = APITwitterPost(auth)
+    poster = APITwitterPost(auth, conversation_tracker)
     
     try:
         # Immediately post the first tweet

@@ -41,18 +41,21 @@ class MentionsHandler:
             raise TwitterError("Not authenticated. Please login first.")
         
         self.username = self.auth.username
-        self.poster = APITwitterPost(auth)
-
-        # Create cache directory if it doesn't exist
+        
+        # First, create cache directory
         self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
         os.makedirs(self.cache_dir, exist_ok=True)
 
+        # Load cache data after setting up cache_dir
         cache_data = self._load_cache_data()
         self.last_checked_id = cache_data.get('last_checked_id')
         self.processed_tweet_ids = set(cache_data.get('processed_ids', []))
         
-        # Initialize conversation tracker
+        # Initialize conversation tracker after setting up cache_dir
         self.conversation_tracker = ConversationTracker(self.cache_dir, self.username)
+        
+        # Create poster after initializing conversation_tracker
+        self.poster = APITwitterPost(auth, self.conversation_tracker)
 
         logger.info(f"Initialized MentionsHandler for user @{self.username}")
         logger.info(f"Last checked mention ID: {self.last_checked_id}")

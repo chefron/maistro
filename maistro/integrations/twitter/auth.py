@@ -164,6 +164,9 @@ class TwitterAuth:
                 
                 if response.status_code == 200:
                     token = response.json().get("guest_token", "")
+                    if not token:
+                        print("Warning: Received empty guest token, retrying...")
+                        continue
                     print(f"Successfully got guest token: {token[:5]}...")
                     self._update_cookies(response)
                     return token
@@ -180,6 +183,24 @@ class TwitterAuth:
                 print(f"Network error during guest token request: {e}")
                 
         raise TwitterError("Could not retrieve guest token after retries.")
+    
+    def _parse_cookie_date(self, date_str):
+        """Parse different date formats in cookies."""
+        formats = [
+            '%a, %d %b %Y %H:%M:%S GMT',  # Standard format
+            '%a, %d-%b-%y %H:%M:%S GMT',  # Twitter mobile format
+            '%a, %d-%b-%Y %H:%M:%S GMT',  # Another variation
+            '%a, %d %b %y %H:%M:%S GMT'   # Short year format
+        ]
+        
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_str, fmt).timestamp()
+            except ValueError:
+                continue
+        
+        print(f"Could not parse date: {date_str}")
+        return None
 
     def _update_cookies(self, response: requests.Response) -> None:
         """Extract and store session cookies with all attributes."""
@@ -208,11 +229,7 @@ class TwitterAuth:
                     # Manually parse the 'expires' attribute
                     expires = None
                     if 'expires' in morsel:
-                        try:
-                            expires_datetime = datetime.strptime(morsel['expires'], '%a, %d %b %Y %H:%M:%S GMT')
-                            expires = expires_datetime.timestamp()
-                        except ValueError as e:
-                            print(f"Error parsing expires date: {e}")
+                        expires = self._parse_cookie_date(morsel['expires'])
                     
                     self.session.cookies.set(
                         key, 
@@ -645,9 +662,12 @@ class TwitterAuth:
         # Try an initial warmup request to establish some cookies
         try:
             print("Performing warm-up request...")
-            self.make_request('GET', 'https://twitter.com/')
+            # Use a more reliable URL that doesn't require authentication
+            self.make_request('GET', 'https://twitter.com/robots.txt')
         except Exception as e:
             print(f"Warm-up request failed (continuing anyway): {e}")
+            # Add a small delay before proceeding with the login
+            time.sleep(2)
         
         # Try login multiple times
         for attempt in range(1, max_attempts + 1):

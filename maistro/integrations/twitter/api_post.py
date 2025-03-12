@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 # Import from our project modules for compatibility
 from utils import TwitterError
 from maistro.core.persona.generator import generate_character_prompt
+from conversation_tracker import ConversationTracker
 
 # Load environment variables from .env file
 load_dotenv()
@@ -208,7 +209,7 @@ class APITwitterPost:
         "behind the scenes"
     ]
     
-    def __init__(self, auth=None):
+    def __init__(self, auth=None, conversation_tracker=None):
         """
         Initialize with Twitter API credentials from environment variables.
         
@@ -217,6 +218,7 @@ class APITwitterPost:
         
         Args:
             auth: Optional placeholder for compatibility with TwitterPost
+            conversation_tracker: Optional ConversationTracker instance
         """
         # Store the auth object for compatibility
         self.auth = auth
@@ -254,6 +256,8 @@ class APITwitterPost:
         self.tweet_history = None
         if self.username:
             self.tweet_history = TweetHistory(self.cache_dir, self.username)
+
+        self.conversation_tracker = conversation_tracker
         
         logger.info(f"Initialized APITwitterPost for user: {self.username or 'Unknown'}")
     
@@ -301,6 +305,12 @@ class APITwitterPost:
             # Add tweet to history if we're tracking it
             if self.tweet_history and not reply_to_id:  # Only track original tweets, not replies
                 self.tweet_history.add_tweet(text, tweet_id)
+
+            # Also store in conversation tracker if available
+            if hasattr(self, 'conversation_tracker') and self.conversation_tracker and not reply_to_id and tweet_id:
+                self.conversation_tracker.store_original_tweet(tweet_id, text)
+            else:
+                print(f"DIAGNOSTIC: NOT storing tweet. has tracker: {hasattr(self, 'conversation_tracker')}, tracker is: {self.conversation_tracker}, is reply: {bool(reply_to_id)}, tweet_id: {tweet_id}")
             
             # Optional: Add a small delay after posting (mimics natural behavior)
             time.sleep(random.uniform(1.0, 3.0))

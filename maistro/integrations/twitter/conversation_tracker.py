@@ -39,31 +39,86 @@ class ConversationTracker:
         try:
             if os.path.exists(self.conversations_file):
                 with open(self.conversations_file, 'r') as f:
-                    self.conversations = json.load(f)
+                    file_content = f.read().strip()
+                    if file_content:
+                        loaded_conversations = json.loads(file_content)
+                        # Don't overwrite conversations that are already in memory
+                        for thread_id, thread_data in loaded_conversations.items():
+                            if thread_id not in self.conversations:
+                                self.conversations[thread_id] = thread_data
+                            # Otherwise, we keep what's in memory
+                        
                 logger.info(f"Loaded {len(self.conversations)} conversation threads")
             else:
                 self.conversations = {}
                 logger.info("No existing conversations found")
         except Exception as e:
             logger.error(f"Error loading conversations: {e}")
-            self.conversations = {}
+            # Don't reset conversations if there's an error
+            if not hasattr(self, 'conversations') or self.conversations is None:
+                self.conversations = {}
     
     def _save_conversations(self):
-        """Save conversations to disk"""
+        """Save conversations to disk with safeguards"""
         try:
+            # First check if we need to merge with existing conversations on disk
+            existing_conversations = {}
+            if os.path.exists(self.conversations_file):
+                try:
+                    with open(self.conversations_file, 'r') as f:
+                        file_content = f.read().strip()
+                        if file_content:
+                            existing_conversations = json.loads(file_content)
+                except Exception as e:
+                    logger.error(f"Error reading existing conversations: {e}")
+            
+            # Merge with what we have in memory (keeping our in-memory version if there's a conflict)
+            merged_conversations = {**existing_conversations, **self.conversations}
+            
+            # Save the merged result
             with open(self.conversations_file, 'w') as f:
-                json.dump(self.conversations, f, indent=2)
-            logger.info(f"Saved {len(self.conversations)} conversation threads")
+                json.dump(merged_conversations, f, indent=2)
+            
+            logger.info(f"Saved {len(merged_conversations)} conversation threads")
+            
+            # Update our in-memory version to include everything
+            self.conversations = merged_conversations
         except Exception as e:
             logger.error(f"Error saving conversations: {e}")
+
+    def store_original_tweet(self, tweet_id, text):
+        print(f"DIAGNOSTIC: Storing original tweet with ID {tweet_id} and text: {text}")
+        """
+        Store an original tweet from the bot (not a reply)
+        
+        Args:
+            tweet_id: The ID of the tweet
+            text: The content of the tweet
+        """
+        # Create a new thread with this tweet as the first message
+        thread_id = f"thread_{tweet_id}"
+        self.conversations[thread_id] = {
+            "user": None,  # No user yet, as no one has replied
+            "started_at": datetime.now().isoformat(),
+            "messages": [{
+                "tweet_id": tweet_id,
+                "sender": self.bot_username,
+                "text": text,
+                "timestamp": datetime.now().isoformat(),
+                "is_reply_to": None
+            }]
+        }
+        logger.info(f"Stored original tweet {tweet_id} in new thread {thread_id}")
+        self._save_conversations()
     
-    def add_mention(self, mention):
+    def add_mention(self, mention, mentions_handler=None):
         """
         Add a mention to the appropriate conversation thread
         
         Args:
             mention: The mention data from Twitter API
-        
+            mentions_handler: Optional MentionsHandler for fetching tweets
+            
         Returns:
             thread_id: The ID of the thread this mention belongs to
         """
@@ -87,8 +142,33 @@ class ConversationTracker:
                         break
                 if thread_id:
                     break
+                    
+            # If not found and mentions_handler is provided, try to fetch the original tweet
+            if not thread_id and mentions_handler and hasattr(mentions_handler, 'fetch_tweet'):
+                try:
+                    logger.info(f"Trying to fetch original tweet {in_reply_to}")
+                    original_tweet = mentions_handler.fetch_tweet(in_reply_to)
+                    if original_tweet:
+                        # Check if it's from our bot
+                        if original_tweet.get("username") == self.bot_username:
+                            # Create a new thread with this tweet as the first message
+                            thread_id = f"thread_{in_reply_to}"
+                            self.conversations[thread_id] = {
+                                "user": username,
+                                "started_at": original_tweet.get("created_at", datetime.now().isoformat()),
+                                "messages": [{
+                                    "tweet_id": original_tweet["id"],
+                                    "sender": self.bot_username,
+                                    "text": original_tweet["text"],
+                                    "timestamp": original_tweet.get("created_at", datetime.now().isoformat()),
+                                    "is_reply_to": original_tweet.get("in_reply_to_status_id")
+                                }]
+                            }
+                            logger.info(f"Created new thread with fetched original tweet: {in_reply_to}")
+                except Exception as e:
+                    logger.error(f"Error fetching original tweet: {e}")
         
-        # If no thread found, create a new one - we don't try to group by user anymore
+        # If no thread found, create a new one
         if not thread_id:
             thread_id = f"{int(time.time())}_{username}_{tweet_id}"
             self.conversations[thread_id] = {
