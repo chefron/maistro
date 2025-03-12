@@ -10,7 +10,7 @@ import os
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 logger = logging.getLogger('twitter_conversation_tracker')
@@ -178,3 +178,57 @@ class ConversationTracker:
                 context += f"@{sender}: {text}\n\n"
         
         return context
+    
+    def get_user_history_summary(self, username: str, max_threads: int = 3):
+        """
+        Get complete previous conversations with a user
+        
+        Args:
+            username: The Twitter username
+            max_threads: Maximum number of previous threads to include
+            
+        Returns:
+            A formatted history of past conversations
+        """
+        # Find all threads with this user
+        user_threads = []
+        for thread_id, thread_data in self.conversations.items():
+            if thread_data["user"] == username:
+                # Add thread and its timestamp for sorting
+                try:
+                    timestamp = datetime.fromisoformat(thread_data["started_at"].replace('Z', '+00:00'))
+                except:
+                    timestamp = datetime.now() - timedelta(days=30)  # Default old time
+                
+                user_threads.append((thread_id, thread_data, timestamp))
+        
+        # Sort threads by time (newest first) and take the most recent ones
+        user_threads.sort(key=lambda x: x[2], reverse=True)
+        recent_threads = user_threads[:max_threads]
+        
+        if not recent_threads:
+            return "No previous conversations with this user."
+        
+        # Build complete history
+        history = f"PREVIOUS CONVERSATIONS WITH @{username} (NOT PART OF CURRENT THREAD):\n\n"
+        
+        for i, (thread_id, thread_data, timestamp) in enumerate(recent_threads, 1):
+            # Get date in readable format
+            date_str = timestamp.strftime("%B %d, %Y")
+            
+            # Get all messages from this thread
+            messages = thread_data["messages"]
+            
+            # Add thread header
+            history += f"Conversation {i} (from {date_str}):\n"
+            
+            # Include ALL messages from the thread
+            for msg in messages:
+                if msg['sender'] == self.bot_username:
+                    history += f"You: {msg['text']}\n"
+                else:
+                    history += f"@{msg['sender']}: {msg['text']}\n"
+            
+            history += "\n"
+        
+        return history

@@ -19,8 +19,10 @@ To use:
 import os
 import random
 import time
+import json
 import logging
-from typing import Dict, List, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple
 import requests
 from requests_oauthlib import OAuth1
 from dotenv import load_dotenv
@@ -39,11 +41,172 @@ logging.basicConfig(
 )
 logger = logging.getLogger('twitter_api_post')
 
+class TweetHistory:
+    """Tracks tweet history to avoid repetition"""
+    
+    def __init__(self, cache_dir: str, username: str, max_history: int = 50):
+        """
+        Initialize the tweet history tracker
+        
+        Args:
+            cache_dir: Directory to store tweet data
+            username: Bot's Twitter username
+            max_history: Maximum number of tweets to remember
+        """
+        self.cache_dir = cache_dir
+        self.username = username
+        self.max_history = max_history
+        self.history_file = os.path.join(cache_dir, f"{username}_tweet_history.json")
+        self.tweets = []
+        self.logger = logging.getLogger('twitter_tweet_history')
+        
+        # Load existing history
+        self._load_history()
+    
+    def _load_history(self):
+        """Load tweet history from disk"""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r') as f:
+                    self.tweets = json.load(f)
+                self.logger.info(f"Loaded {len(self.tweets)} previous tweets")
+            else:
+                self.tweets = []
+                self.logger.info("No existing tweet history found")
+        except Exception as e:
+            self.logger.error(f"Error loading tweet history: {e}")
+            self.tweets = []
+    
+    def _save_history(self):
+        """Save tweet history to disk"""
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(self.tweets, f, indent=2)
+            self.logger.info(f"Saved {len(self.tweets)} tweets to history")
+        except Exception as e:
+            self.logger.error(f"Error saving tweet history: {e}")
+    
+    def add_tweet(self, text: str, tweet_id: str = None):
+        """
+        Add a new tweet to the history
+        
+        Args:
+            text: The text of the tweet
+            tweet_id: Optional ID of the tweet
+        """
+        # Create a record of the tweet
+        tweet_record = {
+            "text": text,
+            "id": tweet_id or str(hash(text)),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Add to the beginning of the list
+        self.tweets.insert(0, tweet_record)
+        
+        # Limit history size
+        if len(self.tweets) > self.max_history:
+            self.tweets = self.tweets[:self.max_history]
+        
+        # Save updated history
+        self._save_history()
+    
+    def get_recent_tweets(self, count: int = 10) -> list:
+        """
+        Get most recent tweets
+        
+        Args:
+            count: Number of tweets to retrieve
+            
+        Returns:
+            List of recent tweet texts
+        """
+        return [tweet["text"] for tweet in self.tweets[:count]]
+    
+    def is_too_similar(self, text: str, threshold: float = 0.7) -> bool:
+        """
+        Check if a tweet is too similar to recent tweets
+        
+        Args:
+            text: The text to check
+            threshold: Similarity threshold (0.0 to 1.0)
+            
+        Returns:
+            True if tweet is too similar to a recent tweet
+        """
+        # If no history, it can't be similar
+        if not self.tweets:
+            return False
+        
+        # Get recent tweets for comparison
+        recent_tweets = self.get_recent_tweets(10)
+        
+        # Simple check for identical tweets
+        if text in recent_tweets:
+            return True
+        
+        # Check for high similarity
+        return self._check_similarity(text, recent_tweets, threshold)
+    
+    def _check_similarity(self, text: str, previous_tweets: list, threshold: float) -> bool:
+        """
+        Perform similarity check on tweets
+        
+        Args:
+            text: New tweet text
+            previous_tweets: List of previous tweet texts
+            threshold: Similarity threshold
+            
+        Returns:
+            True if the new tweet is too similar to any previous tweet
+        """
+        # Simple word overlap coefficient calculation
+        def word_overlap(a, b):
+            # Convert to lowercase and split into words
+            a_words = set(a.lower().split())
+            b_words = set(b.lower().split())
+            
+            # Calculate overlap coefficient
+            intersection = len(a_words.intersection(b_words))
+            smaller_set = min(len(a_words), len(b_words))
+            
+            if smaller_set == 0:
+                return 0.0
+                
+            return intersection / smaller_set
+            
+        # Check similarity with each previous tweet
+        for prev_tweet in previous_tweets:
+            similarity = word_overlap(text, prev_tweet)
+            if similarity >= threshold:
+                return True
+                
+        return False
+
 class APITwitterPost:
     """Handles posting tweets using the official Twitter API v2"""
     
     # API endpoints
     CREATE_TWEET_URL = "https://api.twitter.com/2/tweets"
+    
+    # Define topic suggestions to encourage variety
+    TOPIC_SUGGESTIONS = [
+        "music production",
+        "creative process",
+        "studio session",
+        "new inspiration",
+        "gear or equipment",
+        "artist struggles",
+        "music industry",
+        "collaboration",
+        "performance",
+        "daily life",
+        "fan interaction",
+        "philosophical thoughts",
+        "music recommendations",
+        "upcoming work",
+        "behind the scenes"
+    ]
     
     def __init__(self, auth=None):
         """
@@ -82,6 +245,15 @@ class APITwitterPost:
         
         # Extract username from auth object if available (for compatibility)
         self.username = getattr(auth, 'username', None)
+        
+        # Create cache directory for tweet history
+        self.cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Initialize tweet history tracker if username is available
+        self.tweet_history = None
+        if self.username:
+            self.tweet_history = TweetHistory(self.cache_dir, self.username)
         
         logger.info(f"Initialized APITwitterPost for user: {self.username or 'Unknown'}")
     
@@ -123,7 +295,12 @@ class APITwitterPost:
             response.raise_for_status()
             result = response.json()
             
-            logger.info(f"Successfully created tweet with ID: {result.get('data', {}).get('id')}")
+            tweet_id = result.get('data', {}).get('id')
+            logger.info(f"Successfully created tweet with ID: {tweet_id}")
+            
+            # Add tweet to history if we're tracking it
+            if self.tweet_history and not reply_to_id:  # Only track original tweets, not replies
+                self.tweet_history.add_tweet(text, tweet_id)
             
             # Optional: Add a small delay after posting (mimics natural behavior)
             time.sleep(random.uniform(1.0, 3.0))
@@ -155,11 +332,19 @@ class APITwitterPost:
         logger.info(f"Simulating pre-tweet delay of {thinking_time:.2f} seconds...")
         time.sleep(thinking_time)
     
-    def generate_tweet(self, agent, max_length=280):
-        """Generate a tweet using the agent"""
+    def generate_tweet(self, agent, max_length=280, max_attempts=3):
+        """Generate a tweet using the agent with variety enforcement"""
         
         # Get the Twitter username from the current auth object
         twitter_username = self.username or "user" # Fallback if username is not available
+        
+        # Select random topics to suggest for variety
+        suggested_topics = random.sample(self.TOPIC_SUGGESTIONS, 3)
+        
+        # Get recent tweets for context if available
+        recent_tweets = []
+        if self.tweet_history:
+            recent_tweets = self.tweet_history.get_recent_tweets(5)
         
         # Create a Twitter-specific prompt using the character generator
         # First get the base character prompt
@@ -169,17 +354,36 @@ class APITwitterPost:
             client=agent.client
         )
         
-        # Add Twitter-specific instructions
+        # Add Twitter-specific instructions with variety encouragement
         twitter_instructions = f"""
 
 CURRENT TASK: You're composing a tweet for Twitter. Please write a single authentic statement that reflects your personality and musical identity.
 
 - Post as if you were tweeting from the @{twitter_username} account.
 - Keep it brief and concise (maximum {max_length} characters).
-- Avoid asking questions - make statements instead.
 - Be authentic to your character voice and musical style.
 - Don't add commentary or acknowledge this as a request.
 - Don't use hashtags unless they're genuinely part of your natural voice.
+"""
+
+        # Add variety instructions
+        if recent_tweets:
+            twitter_instructions += f"""
+IMPORTANT - VARIETY: Your most recent tweets were:
+"""
+            for i, tweet in enumerate(recent_tweets):
+                twitter_instructions += f"{i+1}. \"{tweet}\"\n"
+            
+            twitter_instructions += """
+Create a tweet that is SIGNIFICANTLY DIFFERENT from these previous tweets.
+"""
+        
+        # Add topic suggestions
+        twitter_instructions += f"""
+Consider one of these topics if you're looking for inspiration (but don't force it):
+- {suggested_topics[0]}
+- {suggested_topics[1]}
+- {suggested_topics[2]}
 
 Just write the tweet text itself with no additional explanation."""
         
@@ -190,18 +394,36 @@ Just write the tweet text itself with no additional explanation."""
         print(complete_prompt)
         print("========================================\n")
         
-        # Use the combined prompt instead of system+user separation
-        response = agent.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=150,  # Limit to a short response
-            messages=[{"role": "user", "content": complete_prompt}]
-        )
-        
-        tweet_content = response.content[0].text.strip()
-        
-        # Ensure tweet is within character limit
-        if len(tweet_content) > max_length:
-            tweet_content = tweet_content[:max_length-3] + "..."
+        # Make multiple attempts if needed to avoid repetition
+        for attempt in range(max_attempts):
+            # Use the combined prompt instead of system+user separation
+            response = agent.client.messages.create(
+                model="claude-3-7-sonnet-20250219",
+                max_tokens=150,  # Limit to a short response
+                messages=[{"role": "user", "content": complete_prompt}]
+            )
             
+            tweet_content = response.content[0].text.strip()
+            
+            # Ensure tweet is within character limit
+            if len(tweet_content) > max_length:
+                tweet_content = tweet_content[:max_length-3] + "..."
+            
+            # Check if tweet is too similar to recent ones
+            if self.tweet_history and self.tweet_history.is_too_similar(tweet_content):
+                logger.info(f"Generated tweet is too similar to recent tweets (attempt {attempt+1}/{max_attempts})")
+                
+                # If this is the last attempt, use it anyway
+                if attempt == max_attempts - 1:
+                    logger.info(f"Using tweet despite similarity after {max_attempts} attempts")
+                    break
+                
+                # Otherwise try again with stronger diversity instructions
+                complete_prompt += "\n\nIMPORTANT: The previous attempt was too similar to your recent tweets. Please be even more different and original!"
+                continue
+            
+            # If we get here, the tweet is sufficiently different
+            break
+                
         logger.info(f"Generated tweet: {tweet_content}")
         return tweet_content
