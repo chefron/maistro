@@ -375,80 +375,90 @@ class MentionsHandler:
             return []
 
     def generate_reply(self, mention: Dict[str, Any], agent=None, thread_context: str = None) -> str:
-        """
-        Generate a reply to a mention, using an agent, with conversation context.
-        
-        Args:
-            mention: The mention to generate a reply for
-            agent: MusicAgent instance for AI-generated replies
-            thread_context: Optional conversation history
-            
-        Returns:
-            The generated reply text
-        """
-        # Require an agent for generating replies
+        """Generate a reply to a mention with memory integration"""
         if not agent:
             raise ValueError("Agent is required for generating replies")
         
-        # Extract the mention text and username
+        # Extract mention details
         text = mention["text"]
         username = mention["username"]
-        
-        # Get current date and time for context
         current_datetime = datetime.now().strftime("%B %d, %Y, %I:%M %p")
         
-        # Create a mention-specific prompt using the character generator
+        # Query agent's memory based on mention text
+        memory_context = ""
+        try:
+            memory_context, results = agent.memory.get_relevant_context(
+                query=text,
+                n_results=2
+            )
+        except Exception as e:
+            logger.error(f"Error retrieving memory context: {e}")
+        
+        # Create character prompt
         character_prompt, _ = generate_character_prompt(
             config=agent.config,
             artist_name=agent.artist_name,
             client=agent.client
         )
         
-        # Add mention-specific instructions with current date/time context
+        # Build structured reply prompt
         mention_instructions = f"""
 
-    CURRENT TASK: You're responding to a tweet that mentioned you. Please write a brief and authentic reply.
+    === TWITTER REPLY TASK ===
 
-    The tweet is from: @{username}
-    The tweet says: {text}
-    Current date and time: {current_datetime}
+    You're responding to: @{username}'s tweet: {text}
+    Current date: {current_datetime}
+    Keep it brief (max 250 chars) and authentic to your character.
+
+    === CONVERSATION CONTEXT ===
     """
 
-        # Add current thread context if available
+        # Add thread context
         if thread_context:
-            mention_instructions += f"\n\nCURRENT THREAD:\n{thread_context}\n"
+            mention_instructions += f"{thread_context}\n"
         else:
-            mention_instructions += "\n\nThis is the start of a new conversation thread.\n"
+            mention_instructions += "This is the start of a new conversation.\n"
         
-        # Get user history from previous conversations
+        # Add memory context if available
+        if memory_context:
+            mention_instructions += f"""
+
+    === RELEVANT MEMORIES ===
+
+    If relevant, incorporate these details naturally:
+
+    {memory_context}
+    """
+        
+        # Add user history if available
         user_history = self.conversation_tracker.get_user_history_summary(username)
         if user_history and "No previous conversations" not in user_history:
-            mention_instructions += f"\n\n{user_history}\n"
+            mention_instructions += f"""
+
+    === PREVIOUS INTERACTIONS ===
+
+    {user_history}
+    """
 
         mention_instructions += """
-    - Keep your response casual and conversational.
-    - Maintain your unique voice and personality.
-    - Respond directly to what they're saying or asking in the current thread.
-    - Keep it brief (maximum 250 characters).
-    - Be authentic to your character.
-    - Don't add commentary or acknowledge this as a request.
-    - If relevant, you may subtly reference previous conversations from the history provided.
 
-    Just write the reply text itself with no additional explanation."""
+    === OUTPUT INSTRUCTIONS ===
+
+    Write a casual, conversational reply in your unique voice. Reference previous conversations or memories if relevant.
+    Just write the reply text itself.
+    """
         
-        # Rest of the method remains the same...
-        
+        # Generate response
         complete_prompt = character_prompt + mention_instructions
         
-        # Debug output - print the entire prompt being sent to the LLM
+        # Debug output
         print("\n========== MENTION RESPONSE PROMPT SENT TO LLM ==========")
         print(complete_prompt)
         print("=========================================================\n")
         
-        # Use the combined prompt instead of system+user separation
         response = agent.client.messages.create(
             model="claude-3-7-sonnet-20250219",
-            max_tokens=150,  # Limit to a short response
+            max_tokens=500,
             messages=[{"role": "user", "content": complete_prompt}]
         )
         

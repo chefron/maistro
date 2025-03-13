@@ -192,21 +192,15 @@ class APITwitterPost:
     
     # Define topic suggestions to encourage variety
     TOPIC_SUGGESTIONS = [
-        "music production",
+        "streaming stats",
         "creative process",
-        "studio session",
-        "new inspiration",
-        "gear or equipment",
-        "artist struggles",
-        "music industry",
+        "personal life",
+        "AI music",
+        "inspiration",
         "collaboration",
-        "performance",
-        "daily life",
         "fan interaction",
         "philosophical thoughts",
-        "music recommendations",
-        "upcoming work",
-        "behind the scenes"
+        "music recommendations"
     ]
     
     def __init__(self, auth=None, conversation_tracker=None):
