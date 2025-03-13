@@ -36,7 +36,7 @@ class MessageHistory:
         # Combine memory context with user input if provided
         content = user_input
         if memory_context:
-            content = f"If relevant to the conversation, feel free (but not obligated) to naturally draw upon the following excerpts from your memory and knowledge: \n\n{memory_context}\n\n{user_input}"
+            content = f"If relevant to the conversation, feel free to naturally draw upon the following excerpts from your memory and knowledge: \n\n{memory_context}\n\n{user_input}"
             
         # Create and add the user message
         user_message = {"role": "user", "content": content}

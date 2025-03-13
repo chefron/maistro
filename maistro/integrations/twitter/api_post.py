@@ -343,13 +343,23 @@ class APITwitterPost:
         time.sleep(thinking_time)
     
     def generate_tweet(self, agent, max_length=280, max_attempts=3):
-        """Generate a tweet using the agent with variety enforcement"""
+        """Generate a tweet using the agent with memory integration and variety enforcement"""
         
         # Get the Twitter username from the current auth object
         twitter_username = self.username or "user" # Fallback if username is not available
         
-        # Select random topics to suggest for variety
-        suggested_topics = random.sample(self.TOPIC_SUGGESTIONS, 3)
+        # Select a single topic instead of multiple
+        topic = random.choice(self.TOPIC_SUGGESTIONS)
+        
+        # Query agent's memory for relevant context related to the topic
+        memory_context = ""
+        try:
+            memory_context, results = agent.memory.get_relevant_context(
+                query=topic,
+                n_results=3  # Just get the top 3 most relevant memories
+            )
+        except Exception as e:
+            logger.error(f"Error retrieving memory context: {e}")
         
         # Get recent tweets for context if available
         recent_tweets = []
@@ -357,60 +367,77 @@ class APITwitterPost:
             recent_tweets = self.tweet_history.get_recent_tweets(5)
         
         # Create a Twitter-specific prompt using the character generator
-        # First get the base character prompt
         character_prompt, _ = generate_character_prompt(
             config=agent.config,
             artist_name=agent.artist_name,
             client=agent.client
         )
         
-        # Add Twitter-specific instructions with variety encouragement
+        # Add Twitter-specific instructions with clean structure
         twitter_instructions = f"""
 
-CURRENT TASK: You're composing a tweet for Twitter. Please write a single authentic statement that reflects your personality and musical identity.
+    === TWEET CREATION TASK ===
 
-- Post as if you were tweeting from the @{twitter_username} account.
-- Keep it brief and concise (maximum {max_length} characters).
-- Be authentic to your character voice and musical style.
-- Don't add commentary or acknowledge this as a request.
-- Don't fabricate streaming stats
-- Don't use hashtags unless they're genuinely part of your natural voice.
-"""
+    You're composing a tweet for Twitter. Please write a single authentic statement that reflects your personality and musical identity.
 
-        # Add variety instructions
+    - Post as if you were tweeting from the @{twitter_username} account.
+    - Keep it brief and concise (maximum {max_length} characters).
+    - Don't fabricate streaming stats!
+    - Don't use hashtags unless they're genuinely part of your natural voice.
+
+    === TWEET TOPIC ===
+
+    I want you to tweet about: {topic}
+    """
+
+        # Add memory context if available, directly connected to the topic
+        if memory_context:
+            twitter_instructions += f"""
+
+    === RELEVANT MEMORIES ===
+
+    If directly relevant to this topic, feel free (but not obligated) to naturally draw upon the following excerpts from your memory and knowledge:
+
+    {memory_context}
+    """
+        else:
+            twitter_instructions += """
+
+    === RELEVANT MEMORIES ===
+
+    No specific memories found related to this topic - tweet from your general perspective.
+    """
+
+        # Add variety instructions in a cleaner way
         if recent_tweets:
             twitter_instructions += f"""
-IMPORTANT - VARIETY: Your most recent tweets were:
-"""
-            for i, tweet in enumerate(recent_tweets):
-                twitter_instructions += f"{i+1}. \"{tweet}\"\n"
-            
-            twitter_instructions += """
-Create a tweet that is SIGNIFICANTLY DIFFERENT from these previous tweets.
-"""
-        
-        # Add topic suggestions
-        twitter_instructions += f"""
-Consider one of these topics if you're looking for inspiration (but don't force it):
-- {suggested_topics[0]}
-- {suggested_topics[1]}
-- {suggested_topics[2]}
 
-Just write the tweet text itself with no additional explanation."""
+    === VARIETY GUIDELINES ===
+
+    For variety, please avoid being similar to your recent tweets:
+    """
+            for i, tweet in enumerate(recent_tweets):
+                twitter_instructions += f"- \"{tweet}\"\n"
+        
+        twitter_instructions += """
+
+    === OUTPUT INSTRUCTIONS ===
+
+    Just write the tweet text itself with no additional explanation.
+    """
         
         complete_prompt = character_prompt + twitter_instructions
         
-        # Debug output - print the entire prompt being sent to the LLM
+        # Debug output
         print("\n========== PROMPT SENT TO LLM ==========")
         print(complete_prompt)
         print("========================================\n")
         
-        # Make multiple attempts if needed to avoid repetition
+        # Make attempts with simplified retry logic
         for attempt in range(max_attempts):
-            # Use the combined prompt instead of system+user separation
             response = agent.client.messages.create(
                 model="claude-3-7-sonnet-20250219",
-                max_tokens=150,  # Limit to a short response
+                max_tokens=1000,
                 messages=[{"role": "user", "content": complete_prompt}]
             )
             
@@ -422,18 +449,13 @@ Just write the tweet text itself with no additional explanation."""
             
             # Check if tweet is too similar to recent ones
             if self.tweet_history and self.tweet_history.is_too_similar(tweet_content):
-                logger.info(f"Generated tweet is too similar to recent tweets (attempt {attempt+1}/{max_attempts})")
-                
-                # If this is the last attempt, use it anyway
                 if attempt == max_attempts - 1:
-                    logger.info(f"Using tweet despite similarity after {max_attempts} attempts")
-                    break
-                
-                # Otherwise try again with stronger diversity instructions
-                complete_prompt += "\n\nIMPORTANT: The previous attempt was too similar to your recent tweets. Please be even more different and original!"
+                    break  # Use it anyway on last attempt
+                    
+                # Simpler retry instruction
+                complete_prompt += "\n\nPlease try again with a more distinct and original tweet."
                 continue
-            
-            # If we get here, the tweet is sufficiently different
+                
             break
                 
         logger.info(f"Generated tweet: {tweet_content}")

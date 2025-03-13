@@ -50,11 +50,15 @@ class MentionsHandler:
         cache_data = self._load_cache_data()
         self.last_checked_id = cache_data.get('last_checked_id')
         self.processed_tweet_ids = set(cache_data.get('processed_ids', []))
+
+        # Use provided tracker or create a new one
+        if conversation_tracker:
+            self.conversation_tracker = conversation_tracker
+        else:
+            # Initialize conversation tracker
+            self.conversation_tracker = ConversationTracker(self.cache_dir, self.username)
         
-        # Initialize conversation tracker after setting up cache_dir
-        self.conversation_tracker = ConversationTracker(self.cache_dir, self.username)
-        
-        # Create poster after initializing conversation_tracker
+        # Create poster with the same tracker
         self.poster = APITwitterPost(auth, self.conversation_tracker)
 
         logger.info(f"Initialized MentionsHandler for user @{self.username}")
