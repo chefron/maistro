@@ -34,7 +34,7 @@ class MentionsHandler:
     # Search endpoint for mentions
     GRAPHQL_SEARCH_URL = "https://x.com/i/api/graphql/U3QTLwGF8sZCHDuWIMSAmg/SearchTimeline"
 
-    def __init__(self, auth: TwitterAuth):
+    def __init__(self, auth: TwitterAuth, conversation_tracker=None):
         """Initialize the mentions handler with an authenticated TwitterAuth instance."""
         self.auth = auth
         if not self.auth.csrf_token or not self.auth.username:
@@ -354,8 +354,9 @@ class MentionsHandler:
                                             "user_id": user_id,
                                             "username": username,
                                             "name": name,
-                                            "in_reply_to_status_id": tweet.get("in_reply_to_status_id_str"),
-                                            "in_reply_to_user_id": tweet.get("in_reply_to_user_id_str"),
+                                            "in_reply_to_status_id_str": tweet.get("in_reply_to_status_id_str"),
+                                            "in_reply_to_user_id_str": tweet.get("in_reply_to_user_id_str"),
+                                            "conversation_id_str": tweet.get("conversation_id_str")
                                         }
                                         mentions.append(mention)
             
@@ -460,7 +461,7 @@ class MentionsHandler:
 _mentions_running = False
 _mentions_thread = None
 
-def _mentions_loop(auth: TwitterAuth, agent=None, interval: int = 120):
+def _mentions_loop(auth: TwitterAuth, agent=None, conversation_tracker=None, interval: int = 120):
     """
     Main loop for checking mentions at regular intervals.
     
@@ -473,7 +474,7 @@ def _mentions_loop(auth: TwitterAuth, agent=None, interval: int = 120):
     _mentions_running = True
     
     # Create the mentions handler
-    handler = MentionsHandler(auth)
+    handler = MentionsHandler(auth, conversation_tracker)
     
     try:
         while _mentions_running:
@@ -498,29 +499,23 @@ def _mentions_loop(auth: TwitterAuth, agent=None, interval: int = 120):
         
     logger.info("Mentions checker stopped")
 
-def start_mentions_checker(auth: TwitterAuth, agent=None, interval: int = 120) -> threading.Thread:
+def start_mentions_checker(auth: TwitterAuth, agent=None, conversation_tracker=None, interval: int = 120) -> threading.Thread:
     """
     Start the mentions checker in a background thread.
     
     Args:
         auth: Authenticated TwitterAuth instance
         agent: Optional MusicAgent instance for AI-generated replies
+        conversation_tracker: Optional ConversationTracker to share with tweet scheduler
         interval: Time between mention checks in seconds
         
     Returns:
         threading.Thread: The mentions checker thread
     """
-    global _mentions_thread, _mentions_running
-    
-    if _mentions_running:
-        logger.warning("Mentions checker is already running")
-        return _mentions_thread
-    
-    logger.info(f"Starting mentions checker in the background (interval: {interval/60:.1f} minutes)")
-    
+    # Pass along to the mentions loop
     _mentions_thread = threading.Thread(
         target=_mentions_loop,
-        args=(auth, agent, interval),
+        args=(auth, agent, conversation_tracker, interval),
         daemon=True
     )
     _mentions_thread.start()

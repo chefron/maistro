@@ -373,6 +373,7 @@ CURRENT TASK: You're composing a tweet for Twitter. Please write a single authen
 - Keep it brief and concise (maximum {max_length} characters).
 - Be authentic to your character voice and musical style.
 - Don't add commentary or acknowledge this as a request.
+- Don't fabricate streaming stats
 - Don't use hashtags unless they're genuinely part of your natural voice.
 """
 

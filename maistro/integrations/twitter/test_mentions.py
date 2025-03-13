@@ -38,6 +38,7 @@ from auth import TwitterAuth
 from scheduler import schedule_tweets, start_scheduler, stop_scheduler, _get_interval_settings
 from mentions import start_mentions_checker, stop_mentions_checker
 from api_post import APITwitterPost
+from conversation_tracker import ConversationTracker
 
 # Import MusicAgent for AI-generated content
 from maistro.core.agent import MusicAgent
@@ -127,6 +128,12 @@ def main():
     
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    # Create a shared conversation tracker
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    conversation_tracker = ConversationTracker(cache_dir, auth.username)
+    print(f"\nCreated shared conversation tracker for @{auth.username}")
     
     # Start tweet scheduler if enabled
     if not args.no_tweets:
@@ -135,7 +142,8 @@ def main():
         # Create a custom tweet generator that uses APITwitterPost with the agent
         def generate_tweet():
             try:
-                api_poster = APITwitterPost(auth=auth)
+                # Create APITwitterPost with the shared conversation tracker
+                api_poster = APITwitterPost(auth=auth, conversation_tracker=conversation_tracker)
                 return api_poster.generate_tweet(agent)
             except Exception as e:
                 print(f"Error generating tweet: {e}")
@@ -149,9 +157,13 @@ def main():
     # Start mentions checker if enabled
     if not args.no_mentions:
         print(f"\nStarting mentions checker (checking every {mention_interval} seconds)...")
+        
+        # Pass the shared conversation tracker to start_mentions_checker
+        # Note: This requires updating start_mentions_checker in mentions.py to accept this parameter
         start_mentions_checker(
             auth=auth,
-            agent=agent,  # Pass the agent to the mentions checker
+            agent=agent,
+            conversation_tracker=conversation_tracker,  # Pass the shared tracker
             interval=mention_interval
         )
     

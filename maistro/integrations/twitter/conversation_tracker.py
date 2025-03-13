@@ -86,17 +86,21 @@ class ConversationTracker:
         except Exception as e:
             logger.error(f"Error saving conversations: {e}")
 
-    def store_original_tweet(self, tweet_id, text):
-        print(f"DIAGNOSTIC: Storing original tweet with ID {tweet_id} and text: {text}")
+    def store_original_tweet(self, tweet_id, text, conversation_id=None):
         """
         Store an original tweet from the bot (not a reply)
         
         Args:
             tweet_id: The ID of the tweet
             text: The content of the tweet
+            conversation_id: Optional conversation ID (usually same as tweet_id for original tweets)
         """
-        # Create a new thread with this tweet as the first message
-        thread_id = f"thread_{tweet_id}"
+        # For original tweets, the conversation_id is usually the same as the tweet_id
+        conversation_id = conversation_id or tweet_id
+        
+        # Use conversation ID format for thread ID
+        thread_id = f"conversation_{conversation_id}"
+        
         self.conversations[thread_id] = {
             "user": None,  # No user yet, as no one has replied
             "started_at": datetime.now().isoformat(),
@@ -105,20 +109,20 @@ class ConversationTracker:
                 "sender": self.bot_username,
                 "text": text,
                 "timestamp": datetime.now().isoformat(),
-                "is_reply_to": None
+                "is_reply_to": None,
+                "conversation_id": conversation_id
             }]
         }
-        logger.info(f"Stored original tweet {tweet_id} in new thread {thread_id}")
+        logger.info(f"Stored original tweet {tweet_id} in thread {thread_id}")
         self._save_conversations()
     
-    def add_mention(self, mention, mentions_handler=None):
+    def add_mention(self, mention):
         """
         Add a mention to the appropriate conversation thread
         
         Args:
             mention: The mention data from Twitter API
-            mentions_handler: Optional MentionsHandler for fetching tweets
-            
+                
         Returns:
             thread_id: The ID of the thread this mention belongs to
         """
@@ -127,49 +131,66 @@ class ConversationTracker:
         username = mention["username"]
         text = mention["text"]
         created_at = mention.get("created_at", datetime.now().isoformat())
-        in_reply_to = mention.get("in_reply_to_status_id")
+        in_reply_to = mention.get("in_reply_to_status_id_str")
+
+        # ALWAYS force reload from file before processing
+        if os.path.exists(self.conversations_file):
+            try:
+                with open(self.conversations_file, 'r') as f:
+                    file_content = f.read().strip()
+                    if file_content:
+                        self.conversations = json.loads(file_content)
+                        logger.info(f"Force-loaded {len(self.conversations)} conversations directly from file")
+            except Exception as e:
+                logger.error(f"Error force-loading conversations: {e}")
+        
+        # Add extensive debug logging
+        logger.info(f"Processing mention: ID={tweet_id}, username={username}")
+        logger.info(f"Mention is reply to: {in_reply_to}")
+        logger.info(f"Currently tracked conversations: {list(self.conversations.keys())}")
         
         # Determine conversation key (thread_id)
         thread_id = None
         
-        # Check if this is a reply to an existing tweet in our threads
+        # Check if this is a reply to a tweet we've stored in a thread
         if in_reply_to:
-            # Look through all conversations to find the tweet being replied to
-            for thread, data in self.conversations.items():
-                for msg in data["messages"]:
-                    if msg["tweet_id"] == in_reply_to:
-                        thread_id = thread
+            # First try the direct thread ID lookup with the conversation prefix
+            expected_thread_id = f"conversation_{in_reply_to}"
+            logger.info(f"Looking for thread with ID: {expected_thread_id}")
+            
+            if expected_thread_id in self.conversations:
+                thread_id = expected_thread_id
+                logger.info(f"Found thread directly by ID: {thread_id}")
+                
+                # Update the user field if it was null (for original tweets)
+                if self.conversations[thread_id]["user"] is None:
+                    self.conversations[thread_id]["user"] = username
+            else:
+                logger.info(f"Thread ID {expected_thread_id} not found in conversations")
+            
+            # If not found by direct ID, search through all threads
+            if not thread_id:
+                logger.info("Searching through all threads for matching tweet ID")
+                for thread, data in self.conversations.items():
+                    logger.info(f"Checking thread: {thread}")
+                    for msg in data["messages"]:
+                        logger.info(f"  Checking message: tweet_id={msg.get('tweet_id')}")
+                        if msg.get('tweet_id') == in_reply_to:
+                            thread_id = thread
+                            logger.info(f"  Found matching message in thread: {thread}")
+                            break
+                    if thread_id:
                         break
-                if thread_id:
-                    break
-                    
-            # If not found and mentions_handler is provided, try to fetch the original tweet
-            if not thread_id and mentions_handler and hasattr(mentions_handler, 'fetch_tweet'):
-                try:
-                    logger.info(f"Trying to fetch original tweet {in_reply_to}")
-                    original_tweet = mentions_handler.fetch_tweet(in_reply_to)
-                    if original_tweet:
-                        # Check if it's from our bot
-                        if original_tweet.get("username") == self.bot_username:
-                            # Create a new thread with this tweet as the first message
-                            thread_id = f"thread_{in_reply_to}"
-                            self.conversations[thread_id] = {
-                                "user": username,
-                                "started_at": original_tweet.get("created_at", datetime.now().isoformat()),
-                                "messages": [{
-                                    "tweet_id": original_tweet["id"],
-                                    "sender": self.bot_username,
-                                    "text": original_tweet["text"],
-                                    "timestamp": original_tweet.get("created_at", datetime.now().isoformat()),
-                                    "is_reply_to": original_tweet.get("in_reply_to_status_id")
-                                }]
-                            }
-                            logger.info(f"Created new thread with fetched original tweet: {in_reply_to}")
-                except Exception as e:
-                    logger.error(f"Error fetching original tweet: {e}")
+                
+                if not thread_id:
+                    logger.info("No matching thread found by searching message tweet IDs")
         
         # If no thread found, create a new one
         if not thread_id:
+            # For debugging, let's log that we're creating a new thread even though it's a reply
+            if in_reply_to:
+                logger.info(f"IMPORTANT: Creating new thread for reply to {in_reply_to} because parent thread not found")
+                
             thread_id = f"{int(time.time())}_{username}_{tweet_id}"
             self.conversations[thread_id] = {
                 "user": username,
@@ -190,7 +211,7 @@ class ConversationTracker:
         self.conversations[thread_id]["messages"].append(message)
         logger.info(f"Added message to thread {thread_id}: {tweet_id}")
         
-        # Save updated conversations
+        # Save updated conversations after each change
         self._save_conversations()
         
         return thread_id
