@@ -28,9 +28,9 @@ from requests_oauthlib import OAuth1
 from dotenv import load_dotenv
 
 # Import from our project modules for compatibility
-from utils import TwitterError
+from .utils import TwitterError
 from maistro.core.persona.generator import generate_character_prompt
-from conversation_tracker import ConversationTracker
+from .conversation_tracker import ConversationTracker
 
 # Load environment variables from .env file
 load_dotenv()

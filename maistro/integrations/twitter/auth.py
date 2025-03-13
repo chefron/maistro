@@ -14,7 +14,7 @@ import pyotp
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 
-from utils import RequestQueue, TwitterError
+from .utils import RequestQueue, TwitterError
 
 class TLSCipherRandomizingAdapter(HTTPAdapter):
     """Custom HTTP adapter that randomizes TLS ciphers to avoid fingerprinting"""

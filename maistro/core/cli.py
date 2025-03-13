@@ -2,7 +2,7 @@ from pathlib import Path
 import logging
 import os
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.styles import Style
@@ -10,10 +10,13 @@ from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 
 from maistro.core.agent import MusicAgent
-from maistro.core.memory import MemoryManager
 from maistro.integrations.chat.handler import chat_session
-from maistro.integrations.chat.prompt import create_chat_prompt
 from maistro.integrations.youtube.engagement import AgentResponder, CommentMonitor
+from maistro.integrations.twitter import (
+    TwitterAuth, APITwitterPost, start_scheduler, 
+    stop_scheduler, start_mentions_checker, 
+    stop_mentions_checker, ConversationTracker
+)
 
 
 logging.basicConfig(
@@ -46,9 +49,15 @@ class MaistroCLI:
         # Flag to track active chat session
         self.in_chat_session = False
 
-        # Initialize YouTube monitoring components
+        # Initialize YouTube monitoring
         self.youtube_monitor = None
         self.youtube_responder = None
+
+        # Initialize Twitter monitoring
+        self.twitter_auth = None
+        self.twitter_scheduler_thread = None
+        self.twitter_mentions_thread = None
+        self.twitter_conversation_tracker = None
 
         # Initialize commands and prompt toolkit
         self._initialize_commands()
@@ -86,6 +95,7 @@ class MaistroCLI:
             )
         )
 
+        # Integration commands
         self._register_command(
             Command(
                 name="chat",
@@ -114,6 +124,26 @@ class MaistroCLI:
                 tips=["Stops the background YouTube monitoring process"],
                 handler=self.stop_youtube_monitoring,
                 aliases=['youtube-stop']
+            )
+        )
+
+        self._register_command(
+            Command(
+                name="start-twitter",
+                description="Start Twitter posting and mention monitoring",
+                tips=["Starts automatic tweet posting and mention monitoring"],
+                handler=self.start_twitter_integration,
+                aliases=['twitter-start']
+            )
+        )
+
+        self._register_command(
+            Command(
+                name="stop-twitter",
+                description="Stop Twitter posting and mention monitoring",
+                tips=["Stops all Twitter background processes"],
+                handler=self.stop_twitter_integration,
+                aliases=['twitter-stop']
             )
         )
 
@@ -380,6 +410,100 @@ class MaistroCLI:
         else:
             logger.info("YouTube monitoring is not currently running")
 
+    def start_twitter_integration(self, input_list: List[str]) -> None:
+        """Start Twitter posting and mentions monitoring"""
+        if not self.agent:
+            logger.info("No artist loaded. Use 'load-artist' first")
+            return
+        
+        # Check for Twitter credentials
+        username = os.getenv('TWITTER_USERNAME')
+        password = os.getenv('TWITTER_PASSWORD')
+        email = os.getenv('TWITTER_EMAIL')
+        two_factor_secret = os.getenv('TWITTER_2FA_SECRET')
+        
+        if not username or not password:
+            logger.error("Twitter credentials not found. Please set TWITTER_USERNAME and TWITTER_PASSWORD in your .env file")
+            return
+        
+        # Initialize Twitter auth
+        logger.info("\nInitializing Twitter authentication...")
+        try:
+            self.twitter_auth = TwitterAuth()
+            login_success = self.twitter_auth.login_with_retry(username, password, email, two_factor_secret)
+            
+            if not login_success:
+                logger.error("Failed to log in to Twitter. Please check your credentials.")
+                return
+                
+            logger.info("✅ Successfully logged in to Twitter")
+        except Exception as e:
+            logger.error(f"Twitter authentication error: {e}")
+            return
+        
+        # Create shared conversation tracker
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        self.twitter_conversation_tracker = ConversationTracker(cache_dir, self.twitter_auth.username)
+        logger.info(f"Created shared conversation tracker for @{self.twitter_auth.username}")
+        
+        # Start tweet scheduler
+        logger.info("\nStarting tweet scheduler...")
+        
+        # Create tweet generator function
+        def generate_tweet():
+            try:
+                api_poster = APITwitterPost(auth=self.twitter_auth, conversation_tracker=self.twitter_conversation_tracker)
+                return api_poster.generate_tweet(self.agent)
+            except Exception as e:
+                logger.error(f"Error generating tweet: {e}")
+                return "Error generating tweet"
+        
+        try:
+            self.twitter_scheduler_thread = start_scheduler(
+                auth=self.twitter_auth,
+                content_generator=generate_tweet
+            )
+            logger.info("✅ Tweet scheduler started")
+        except Exception as e:
+            logger.error(f"Error starting tweet scheduler: {e}")
+        
+        # Start mentions checker
+        logger.info("\nStarting mentions checker...")
+        
+        try:
+            self.twitter_mentions_thread = start_mentions_checker(
+                auth=self.twitter_auth,
+                agent=self.agent,
+                conversation_tracker=self.twitter_conversation_tracker
+            )
+            logger.info("✅ Mentions checker started")
+        except Exception as e:
+            logger.error(f"Error starting mentions checker: {e}")
+        
+        logger.info("\nTwitter integration running in background. Use 'stop-twitter' to stop.")
+
+    def stop_twitter_integration(self, input_list: List[str]) -> None:
+        """Stop Twitter posting and mentions monitoring"""
+        stopped_anything = False
+        
+        # Stop tweet scheduler
+        if stop_scheduler():
+            logger.info("✅ Stopped tweet scheduler")
+            self.twitter_scheduler_thread = None
+            stopped_anything = True
+        
+        # Stop mentions checker
+        if stop_mentions_checker():
+            logger.info("✅ Stopped mentions checker")
+            self.twitter_mentions_thread = None
+            stopped_anything = True
+        
+        if not stopped_anything:
+            logger.info("No Twitter processes were running")
+        else:
+            logger.info("Twitter integration stopped")
+
     def memory_upload(self, input_list: List[str]) -> None:
         """Upload documents to agent memory"""
         if not self.agent:
@@ -478,7 +602,7 @@ class MaistroCLI:
             logger.info(f"No results found for '{query}'")
             return
         
-        logger.info(f"\nSearch Results:")
+        logger.info("\nSearch Results:")
         for i, result in enumerate(results, 1):
             logger.info(f"\n{i}. Score: {result.similarity_score:.2f}")
             logger.info(f"Category: {result.memory.category}")

@@ -17,11 +17,11 @@ import urllib.parse
 from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime, timedelta
 
-from auth import TwitterAuth
-from utils import TwitterError
-from api_post import APITwitterPost
+from .auth import TwitterAuth
+from .utils import TwitterError
+from .api_post import APITwitterPost
 from maistro.core.persona.generator import generate_character_prompt
-from conversation_tracker import ConversationTracker
+from .conversation_tracker import ConversationTracker
 
 logging.basicConfig(
     level=logging.INFO,

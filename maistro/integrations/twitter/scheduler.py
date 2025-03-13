@@ -27,9 +27,9 @@ import logging
 
 from dotenv import load_dotenv
 
-from auth import TwitterAuth
-from api_post import APITwitterPost
-from conversation_tracker import ConversationTracker
+from .auth import TwitterAuth
+from .api_post import APITwitterPost
+from .conversation_tracker import ConversationTracker
 
 # Configure logging
 logging.basicConfig(
